@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { useField } from '@payloadcms/ui'
-import type { FieldType } from '@/validation/types'
+import type { FieldType, ConditionRule, ValidationRules, UIMetadata } from '@/validation/types'
 import { FieldRow } from './FieldRow'
 
 export interface FieldDef {
@@ -37,6 +37,17 @@ export interface FieldDef {
     readOnly?: boolean
     hidden?: boolean
   }
+  // Feature 1: Conditional Logic
+  conditions?: ConditionRule[]
+  conditionMode?: 'AND' | 'OR'
+  // Feature 2: Advanced Validation
+  validation?: ValidationRules
+  // Feature 3: UI Metadata
+  ui?: UIMetadata
+  // Feature 4: Nested Blocks
+  allowedBlocks?: string[]
+  minBlocks?: number
+  maxBlocks?: number
 }
 
 function parseSchema(raw: unknown): FieldDef[] {

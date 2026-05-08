@@ -25,12 +25,129 @@ const VALID_FIELD_TYPES: Set<FieldType> = new Set([
   'group',
   'relationship',
   'json',
+  'blocks',
 ])
 
 const CONTAINER_TYPES = new Set<FieldType>(['array', 'group'])
 const LEAF_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*$/
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+const VALID_CONDITION_OPERATORS = new Set([
+  'equals',
+  'not_equals',
+  'contains',
+  'not_contains',
+  'greater_than',
+  'less_than',
+  'in',
+  'not_in',
+  'exists',
+  'empty',
+])
+
+// ─── Condition validator ──────────────────────────────────────────────────────
+
+function validateConditions(
+  conditions: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (!Array.isArray(conditions)) {
+    errors.push(`${path}: "conditions" must be an array.`)
+    return
+  }
+  ;(conditions as unknown[]).forEach((cond, i) => {
+    const cp = `${path}[${i}]`
+    if (!cond || typeof cond !== 'object') {
+      errors.push(`${cp}: condition must be an object.`)
+      return
+    }
+    const c = cond as Record<string, unknown>
+    if (typeof c.field !== 'string' || !c.field.trim()) {
+      errors.push(`${cp}: "field" must be a non-empty string.`)
+    }
+    if (
+      typeof c.operator !== 'string' ||
+      !VALID_CONDITION_OPERATORS.has(c.operator)
+    ) {
+      errors.push(
+        `${cp}: "operator" must be one of: ${[...VALID_CONDITION_OPERATORS].join(', ')}.`,
+      )
+    }
+  })
+}
+
+// ─── Validation-rules object validator ───────────────────────────────────────
+
+function validateValidationRules(
+  v: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  const numericProps = [
+    'minLength',
+    'maxLength',
+    'min',
+    'max',
+    'step',
+    'minRows',
+    'maxRows',
+    'maxFileSize',
+    'maxSelections',
+  ]
+  for (const prop of numericProps) {
+    if (v[prop] !== undefined && typeof v[prop] !== 'number') {
+      errors.push(`${path}.${prop}: must be a number.`)
+    }
+  }
+
+  if (
+    typeof v.minLength === 'number' &&
+    typeof v.maxLength === 'number' &&
+    v.minLength > v.maxLength
+  ) {
+    errors.push(`${path}: "minLength" (${v.minLength}) must be ≤ "maxLength" (${v.maxLength}).`)
+  }
+
+  if (
+    typeof v.min === 'number' &&
+    typeof v.max === 'number' &&
+    v.min > v.max
+  ) {
+    errors.push(`${path}: "min" (${v.min}) must be ≤ "max" (${v.max}).`)
+  }
+
+  if (
+    typeof v.minRows === 'number' &&
+    typeof v.maxRows === 'number' &&
+    v.minRows > v.maxRows
+  ) {
+    errors.push(`${path}: "minRows" (${v.minRows}) must be ≤ "maxRows" (${v.maxRows}).`)
+  }
+
+  if (v.regex !== undefined) {
+    if (typeof v.regex !== 'string') {
+      errors.push(`${path}.regex: must be a string.`)
+    } else {
+      try {
+        new RegExp(v.regex)
+      } catch {
+        errors.push(`${path}.regex: invalid regular expression "${v.regex}".`)
+      }
+    }
+  }
+
+  if (v.integerOnly !== undefined && typeof v.integerOnly !== 'boolean') {
+    errors.push(`${path}.integerOnly: must be a boolean.`)
+  }
+  if (v.uniqueItems !== undefined && typeof v.uniqueItems !== 'boolean') {
+    errors.push(`${path}.uniqueItems: must be a boolean.`)
+  }
+  if (v.allowedMimeTypes !== undefined && !Array.isArray(v.allowedMimeTypes)) {
+    errors.push(`${path}.allowedMimeTypes: must be an array of strings.`)
+  }
+}
+
+// ─── Per-field validator ──────────────────────────────────────────────────────
 
 function validateField(field: unknown, path: string, errors: string[], warnings: string[]): void {
   if (!field || typeof field !== 'object' || Array.isArray(field)) {
@@ -52,9 +169,8 @@ function validateField(field: unknown, path: string, errors: string[], warnings:
   // type
   if (typeof f.type !== 'string') {
     errors.push(`${path}: "type" is required.`)
-    return // cannot continue without a valid type
+    return
   }
-
   if (!VALID_FIELD_TYPES.has(f.type as FieldType)) {
     errors.push(`${path}: unknown field type "${f.type}".`)
     return
@@ -62,7 +178,7 @@ function validateField(field: unknown, path: string, errors: string[], warnings:
 
   const type = f.type as FieldType
 
-  // label (optional but recommended)
+  // label
   if (f.label !== undefined && typeof f.label !== 'string') {
     errors.push(`${path}: "label" must be a string.`)
   } else if (f.label === undefined) {
@@ -74,7 +190,57 @@ function validateField(field: unknown, path: string, errors: string[], warnings:
     errors.push(`${path}: "required" must be a boolean.`)
   }
 
-  // ── type-specific rules ──────────────────────────────────────────────────
+  // ── Feature 1: conditions ─────────────────────────────────────────────────
+
+  if (f.conditions !== undefined) {
+    validateConditions(f.conditions, `${path}.conditions`, errors)
+  }
+
+  if (
+    f.conditionMode !== undefined &&
+    f.conditionMode !== 'AND' &&
+    f.conditionMode !== 'OR'
+  ) {
+    errors.push(`${path}: "conditionMode" must be "AND" or "OR".`)
+  }
+
+  // ── Feature 2: validation rules object ───────────────────────────────────
+
+  if (f.validation !== undefined) {
+    if (!f.validation || typeof f.validation !== 'object' || Array.isArray(f.validation)) {
+      errors.push(`${path}: "validation" must be an object.`)
+    } else {
+      validateValidationRules(
+        f.validation as Record<string, unknown>,
+        `${path}.validation`,
+        errors,
+      )
+    }
+  }
+
+  // ── Feature 3: ui metadata ────────────────────────────────────────────────
+
+  if (f.ui !== undefined) {
+    if (!f.ui || typeof f.ui !== 'object' || Array.isArray(f.ui)) {
+      errors.push(`${path}: "ui" must be an object.`)
+    } else {
+      const ui = f.ui as Record<string, unknown>
+      if (
+        ui.width !== undefined &&
+        !['full', 'half', 'third', 'quarter'].includes(ui.width as string)
+      ) {
+        errors.push(`${path}.ui.width: must be "full", "half", "third", or "quarter".`)
+      }
+      if (ui.order !== undefined && typeof ui.order !== 'number') {
+        errors.push(`${path}.ui.order: must be a number.`)
+      }
+      if (ui.collapsed !== undefined && typeof ui.collapsed !== 'boolean') {
+        errors.push(`${path}.ui.collapsed: must be a boolean.`)
+      }
+    }
+  }
+
+  // ── Type-specific rules ───────────────────────────────────────────────────
 
   if (type === 'select' || type === 'multiselect') {
     if (!Array.isArray(f.options) || f.options.length === 0) {
@@ -127,7 +293,7 @@ function validateField(field: unknown, path: string, errors: string[], warnings:
     }
   }
 
-  // ── containers – recurse ─────────────────────────────────────────────────
+  // ── Containers: recurse ───────────────────────────────────────────────────
 
   if (CONTAINER_TYPES.has(type)) {
     if (!Array.isArray(f.fields) || f.fields.length === 0) {
@@ -145,6 +311,35 @@ function validateField(field: unknown, path: string, errors: string[], warnings:
       }
     }
   }
+
+  // ── Feature 4: blocks field ───────────────────────────────────────────────
+
+  if (type === 'blocks') {
+    if (f.allowedBlocks !== undefined) {
+      if (!Array.isArray(f.allowedBlocks)) {
+        errors.push(`${path}: "allowedBlocks" must be an array.`)
+      } else {
+        ;(f.allowedBlocks as unknown[]).forEach((slug, i) => {
+          if (typeof slug !== 'string' || !slug.trim()) {
+            errors.push(`${path}.allowedBlocks[${i}]: must be a non-empty string.`)
+          }
+        })
+      }
+    }
+    if (f.minBlocks !== undefined && typeof f.minBlocks !== 'number') {
+      errors.push(`${path}: "minBlocks" must be a number.`)
+    }
+    if (f.maxBlocks !== undefined && typeof f.maxBlocks !== 'number') {
+      errors.push(`${path}: "maxBlocks" must be a number.`)
+    }
+    if (
+      typeof f.minBlocks === 'number' &&
+      typeof f.maxBlocks === 'number' &&
+      f.minBlocks > f.maxBlocks
+    ) {
+      errors.push(`${path}: "minBlocks" (${f.minBlocks}) must be ≤ "maxBlocks" (${f.maxBlocks}).`)
+    }
+  }
 }
 
 function validateFields(
@@ -159,7 +354,6 @@ function validateFields(
     const fieldPath = `${path}[${index}]`
     validateField(field, fieldPath, errors, warnings)
 
-    // Duplicate name detection at the same level
     const f = field as Record<string, unknown>
     if (typeof f.name === 'string' && f.name) {
       if (names.has(f.name)) {

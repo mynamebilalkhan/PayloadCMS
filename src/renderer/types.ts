@@ -1,5 +1,8 @@
 import type { ComponentType } from 'react'
-import type { BlockSchema, BlockData } from '@/validation/types'
+import type { BlockSchema, BlockData, NestedBlockValue } from '@/validation/types'
+
+// Re-export for convenience so callers can import from '@/renderer'
+export type { NestedBlockValue }
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
@@ -52,6 +55,23 @@ export interface PopulatedBlockInstance {
 export interface DynamicRendererProps {
   layout: PopulatedBlockInstance[]
   /** Override the fallback renderer for unknown block types. */
+  customFallback?: ComponentType<FallbackRendererProps>
+}
+
+// ─── Feature 4: Nested Block Renderer ────────────────────────────────────────
+
+/**
+ * Props for the NestedBlocksRenderer component.
+ * Used to render blocks stored in a 'blocks' schema field.
+ */
+export interface NestedBlocksRendererProps {
+  /** The array of nested block values from a 'blocks' field. */
+  blocks: NestedBlockValue[] | null | undefined
+  /** Current nesting depth (used to enforce maxDepth). Start at 0. */
+  depth?: number
+  /** Maximum allowed nesting depth (default: 3). */
+  maxDepth?: number
+  /** Override the fallback renderer for unregistered block types. */
   customFallback?: ComponentType<FallbackRendererProps>
 }
 

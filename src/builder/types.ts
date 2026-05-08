@@ -23,7 +23,21 @@ export interface RawFieldInput {
   defaultValue?: unknown
   collection?: string
   allowedMimeTypes?: string[]
+  hasMany?: boolean
+  timeFormat?: boolean
   admin?: Record<string, unknown>
+  // Feature 1: Conditional Logic
+  conditions?: unknown
+  conditionMode?: string
+  // Feature 2: Advanced Validation
+  validation?: Record<string, unknown>
+  // Feature 3: UI Metadata
+  ui?: Record<string, unknown>
+  // Feature 4: Nested Blocks
+  allowedBlocks?: string[]
+  minBlocks?: number
+  maxBlocks?: number
+  // Allow arbitrary extra props (passed through as-is)
   [key: string]: unknown
 }
 

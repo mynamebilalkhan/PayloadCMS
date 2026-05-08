@@ -1,5 +1,5 @@
 export { registry } from './registry'
-export { DynamicRenderer } from './DynamicRenderer'
+export { DynamicRenderer, NestedBlocksRenderer } from './DynamicRenderer'
 export { FallbackRenderer } from './FallbackRenderer'
 export { FieldRenderer } from './FieldRenderer'
 export type {
@@ -10,4 +10,6 @@ export type {
   FieldRendererProps,
   PopulatedBlockInstance,
   RegistryEntry,
+  NestedBlocksRendererProps,
+  NestedBlockValue,
 } from './types'

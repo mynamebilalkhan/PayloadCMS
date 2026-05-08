@@ -2,12 +2,12 @@
 
 ## Overview
 
-A Payload CMS 3.76 + Next.js 15 App Router project for managing site pages with a dynamic block architecture. The codebase currently has two page-authoring paths:
+A Payload CMS 3.76 + Next.js 15 App Router project for managing site pages with a dynamic block architecture. The codebase has two page-authoring paths:
 
 - A **runtime versioned block system** where block schemas live in the database. Pages store block instances that pin to immutable schema versions, so schema changes do not break existing content.
-- A newer **Payload-native page authoring path** in `Pages.ts` that adds a `hero` group and a Payload `blocks` field for configured blocks such as `Testimonials`.
+- A **Payload-native page authoring path** in `Pages.ts` that adds a `hero` group and a Payload `blocks` field for configured blocks such as `Testimonials`.
 
-The runtime block path is the one currently rendered by the frontend route. The Payload-native hero/static block fields are configured in the CMS but are not yet wired into `src/app/(frontend)/[[...slug]]/page.tsx`.
+Both paths are rendered by the frontend route. The runtime block system has been extended with four features: conditional field logic, advanced validation rules, visual UI metadata (tabbed/grid admin layout), and nested/composable blocks.
 
 **Stack:**
 - Backend: Payload CMS 3.76.0 with PostgreSQL adapter
@@ -86,7 +86,7 @@ Page metadata plus authoring fields for both the runtime block system and the ne
 
 **Key design:** Pages pin to a specific `blockVersion` per instance. Schema updates create new versions and do not mutate already-authored page instances.
 
-**Payload-native fields also present on each page (all three now rendered):**
+**Payload-native fields also present on each page:**
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -143,6 +143,8 @@ Inline in `payload.config.ts`. Email + name fields; used to authenticate API cal
 
 **File:** `src/validation/types.ts`
 
+### Core schema types
+
 ```ts
 interface BlockSchema {
   fields: BlockField[]
@@ -155,17 +157,107 @@ type FieldType =
   | 'select' | 'multiselect'
   | 'date' | 'image' | 'file' | 'url' | 'email' | 'color'
   | 'array' | 'group' | 'relationship' | 'json'
+  | 'blocks'
+```
 
+### Conditional logic types
+
+```ts
+type ConditionOperator =
+  | 'equals' | 'not_equals'
+  | 'contains' | 'not_contains'
+  | 'greater_than' | 'less_than'
+  | 'in' | 'not_in'
+  | 'exists' | 'empty'
+
+interface ConditionRule {
+  field: string           // dot-notation path to sibling field value
+  operator: ConditionOperator
+  value?: unknown         // not required for 'exists' / 'empty'
+}
+```
+
+### Validation rules
+
+```ts
+interface ValidationRules {
+  required?: boolean
+  minLength?: number; maxLength?: number   // text, textarea, url, email
+  min?: number; max?: number               // number
+  minRows?: number; maxRows?: number       // array
+  regex?: RegExp                           // text, textarea, url, email
+  step?: number                            // number — value must be a multiple of step
+  integerOnly?: boolean                    // number
+  uniqueItems?: boolean                    // array — no duplicate rows (shallow JSON equality)
+  maxSelections?: number                   // multiselect
+  maxFileSize?: number                     // file, image — max bytes
+  allowedMimeTypes?: string[]              // file
+}
+```
+
+### UI metadata
+
+```ts
+type UIWidth = 'full' | 'half' | 'third' | 'quarter'
+
+interface UIMetadata {
+  tab?: string        // tab name (default 'General')
+  section?: string    // section within tab (default 'General')
+  width?: UIWidth     // grid column width
+  collapsed?: boolean // start collapsed in admin
+  order?: number      // sort order within section
+}
+```
+
+### BaseField
+
+```ts
 interface BaseField {
   name: string
   type: FieldType
   label?: string
   required?: boolean
+  conditions?: ConditionRule[]
+  conditionMode?: 'AND' | 'OR'       // default 'AND'
+  validation?: ValidationRules
+  ui?: UIMetadata
   admin?: { description?; readOnly?; hidden?; placeholder?; condition? }
 }
 ```
 
-Type-specific interfaces extend `BaseField` with their own constraints (e.g., `SelectField` adds `options`, `ArrayField` adds nested `fields` + `minRows`/`maxRows`).
+Type-specific interfaces extend `BaseField` with their own constraints:
+
+| Interface | Key additions |
+|-----------|---------------|
+| `TextField` | `minLength`, `maxLength` |
+| `NumberField` | `min`, `max` |
+| `SelectField` | `options: { label, value }[]` |
+| `MultiSelectField` | `options`, `maxSelections` |
+| `ArrayField` | nested `fields`, `minRows`, `maxRows` |
+| `GroupField` | nested `fields` |
+| `RelationshipField` | `collection`, `hasMany` |
+| `FileField` | `allowedMimeTypes` |
+| `DateField` | `timeFormat` |
+| `BlocksField` | `allowedBlocks?`, `minBlocks?`, `maxBlocks?` |
+
+### Nested block types
+
+```ts
+interface BlocksField extends BaseField {
+  type: 'blocks'
+  allowedBlocks?: string[]   // slugs of block definitions that can be nested
+  minBlocks?: number
+  maxBlocks?: number
+}
+
+interface NestedBlockValue {
+  id?: string
+  blockType: string          // slug of the nested block definition
+  data: BlockData
+}
+```
+
+`BlockField` is a union of all typed field interfaces. `BlockData` is `Record<string, unknown>`.
 
 ---
 
@@ -179,6 +271,10 @@ Type-specific interfaces extend `BaseField` with their own constraints (e.g., `S
 - Checks `fields` array is non-empty
 - Validates field names (alphanumeric + underscore, starts with letter), types, and labels
 - Type-specific rules: select options, number min/max, nested field recursion, duplicate name detection
+- Validates `conditions` array: operator values, field name presence
+- Validates `validation` object: numeric types, regex compilability, boolean flags
+- Validates `ui` object: width values, numeric order
+- For `blocks` fields: validates `allowedBlocks` slug array, `minBlocks`/`maxBlocks` types
 - Returns `{ valid, errors, warnings }`
 
 ### Data Validation
@@ -186,8 +282,23 @@ Type-specific interfaces extend `BaseField` with their own constraints (e.g., `S
 
 `validateBlockData(schema: BlockSchema, data: BlockData): DataValidationResult`
 
-- Validates instance data against its schema (required fields, type coercion, nested array/group recursion)
+- Validates instance data against its schema (required fields, type coercion, nested array/group/blocks recursion)
+- `mergeValidation(field): ValidationRules` — merges direct field props with `field.validation.*`; the `validation` object takes precedence when both specify the same constraint
+- Applies extended rules: `regex` match, `step` multiple check, `integerOnly` via `Number.isInteger`, `uniqueItems` via JSON-serialized dedup, `maxSelections`, `maxFileSize`
+- For `blocks` fields: validates `minBlocks`/`maxBlocks` counts and `allowedBlocks` membership
 - Returns `{ valid, errors: [{ path, message }] }`
+
+### Condition Evaluation
+**File:** `src/validation/evaluateConditions.ts`
+
+`evaluateConditions(conditions: ConditionRule[], mode: 'AND' | 'OR', formData: Record<string, unknown>): boolean`
+
+- Returns `true` when the field should be **visible** (conditions pass)
+- Uses `getValueByPath()` for dot-notation field paths
+- `equals`/`not_equals` use loose equality (`==`) to handle string/number coercion
+- `in`/`not_in` cast `value` to array
+- `exists` checks `!= null && !== ''`; `empty` is its inverse
+- With `AND` mode: all conditions must pass; with `OR` mode: any condition suffices
 
 ---
 
@@ -202,6 +313,33 @@ Leniently pre-processes raw input before strict validation:
 - Coerces unknown field types → `'text'`
 - Normalizes option shorthand strings → `{ label, value }` objects
 - Recursively handles nested fields
+- Passes through `conditions`, `conditionMode`, `validation`, `ui` unchanged
+- For `blocks` fields: passes through `allowedBlocks`, `minBlocks`, `maxBlocks`
+
+### Form Layout Builder
+**File:** `src/builder/buildFormLayout.ts`
+
+`buildFormLayout(schema: BlockSchema): FormLayout`
+
+Groups schema fields (excluding `admin.hidden`) into a tab → section → field hierarchy:
+- Fields without `ui.tab` fall into the `'General'` tab
+- Fields without `ui.section` fall into the `'General'` section
+- Fields are sorted by `ui.order` within each section
+- Returns `FormLayout` — an ordered array of `FormTab` objects, each containing `FormSection` objects, each containing `FormFieldEntry` objects
+
+`hasUIMetadata(schema: BlockSchema): boolean`
+
+Returns `true` only when at least one field has `ui.tab`, `ui.section`, `ui.width`, or `ui.order` set. `collapsed`-only metadata does not trigger the tabbed layout. This guard ensures backward compatibility — schemas without layout metadata continue rendering in the flat column layout.
+
+`widthToStyle(width: UIWidth): string`
+
+Maps width values to CSS calc strings:
+| Width | CSS |
+|-------|-----|
+| `'full'` | `'100%'` |
+| `'half'` | `'calc(50% - 8px)'` |
+| `'third'` | `'calc(33.333% - 11px)'` |
+| `'quarter'` | `'calc(25% - 12px)'` |
 
 ### Schema Save
 **File:** `src/builder/saveSchema.ts`
@@ -247,11 +385,36 @@ Current registered runtime block components:
 
 `DynamicRenderer({ layout, customFallback })`
 
-Iterates over a page's layout array:
+Iterates over a page's `dbLayout` array:
 1. Looks up component in registry by `blockDefinition.slug`
-2. Renders component with `data` and `schema` props
+2. Renders component with `data`, `schema`, `instanceId`, `anchor` props
 3. Falls back to `FallbackRenderer` for unregistered slugs
 4. Skips `hidden` blocks; applies `anchor` as HTML `id`
+
+### NestedBlocksRenderer
+**File:** `src/renderer/DynamicRenderer.tsx`
+
+`NestedBlocksRenderer({ blocks, depth?, maxDepth?, customFallback? })`
+
+Renders the value of a `blocks` schema field from inside a block component. Block components that contain a `blocks` data field call this utility to render their children via the same registry.
+
+- Enforces a maximum nesting depth (`maxDepth`, default 3) — returns `null` and warns in dev when exceeded
+- Looks up each nested block's component from the registry by `blockType`
+- Passes `schema={{ fields: [] }}` to nested components (typed nested components use their own data interfaces, not generic schema rendering)
+- Falls back to `FallbackRenderer` for unregistered nested block types
+
+```tsx
+import { NestedBlocksRenderer } from '@/renderer'
+
+export function SectionBlock({ data }) {
+  return (
+    <section>
+      <h2>{data.title}</h2>
+      <NestedBlocksRenderer blocks={data.children} />
+    </section>
+  )
+}
+```
 
 ### FieldRenderer
 **File:** `src/renderer/FieldRenderer.tsx`
@@ -406,7 +569,7 @@ const [hydrated, setHydrated] = useState(!hasExistingValue)
 | File | Purpose |
 |------|---------|
 | `index.tsx` | Root component; owns `FieldDef[]` state, syncs to Payload field via `setValue({ fields })` |
-| `FieldRow.tsx` | Single field card: name (auto-slugified), type dropdown (17 types), label, required; always-visible `OptionsEditor`/`NestedFieldsEditor` for matching types; advanced options behind toggle |
+| `FieldRow.tsx` | Single field card: name (auto-slugified), type dropdown (18 types), label, required; always-visible `OptionsEditor`/`NestedFieldsEditor`/blocks config for matching types; four expandable sub-panels for advanced options |
 | `OptionsEditor.tsx` | Editable `{label, value}` pairs for `select`/`multiselect` field types |
 | `NestedFieldsEditor.tsx` | Recursive nested field list for `array`/`group` types; reuses `FieldRow`, max depth 3 |
 
@@ -422,11 +585,26 @@ interface FieldDef {
   collection?: string; hasMany?: boolean          // relationship
   allowedMimeTypes?: string                       // file
   timeFormat?: boolean                            // date
+  allowedBlocks?: string[]                        // blocks
+  minBlocks?: number; maxBlocks?: number          // blocks
+  conditions?: ConditionRule[]
+  conditionMode?: 'AND' | 'OR'
+  validation?: ValidationRules
+  ui?: UIMetadata
   admin?: { description?; placeholder?; readOnly?; hidden? }
 }
 ```
 
 Serialised output: `{ fields: FieldDef[] }` — matches `BlockSchema` exactly.
+
+**FieldRow expandable panels (always collapsed by default):**
+
+1. **Advanced options** — existing type-specific inputs (options, nested fields, number bounds, mime types, etc.)
+2. **Validation Rules** — `regex`, `step`, `integerOnly`, `maxSelections`, `uniqueItems`, `maxFileSize`
+3. **UI Layout** — `tab`, `section`, `width` (select), `order`, `collapsed` checkbox
+4. **Conditional Visibility** — conditions list (field path + operator + value per rule), AND/OR mode toggle; `exists`/`empty` operators hide the value input
+
+**Blocks field (type `'blocks'`):** When `type === 'blocks'` is selected, an always-visible panel appears for `allowedBlocks` slugs (comma-separated input) and `minBlocks`/`maxBlocks` numeric inputs, independent of the expandable advanced panel.
 
 ---
 
@@ -451,11 +629,28 @@ admin: {
 | File | Purpose |
 |------|---------|
 | `index.tsx` | Root; watches blockVersion, fetches schema, cleans orphaned keys, calls `setValue` |
-| `SchemaForm.tsx` | Iterates `schema.fields[]`, renders `FieldInput` per field |
-| `FieldInput.tsx` | Switch on `field.type` → appropriate HTML input; imports `MediaPickerInput` for `image`/`file` |
+| `SchemaForm.tsx` | Iterates `schema.fields[]`; evaluates conditions per field; renders flat column or tabbed/grid layout |
+| `FieldInput.tsx` | Switch on `field.type` → appropriate HTML input; handles all 18 field types |
 | `ArrayFieldInput.tsx` | Repeatable row list with Add/Remove; each row rendered via `SchemaForm` recursively |
 | `GroupFieldInput.tsx` | Nested object rendered via `SchemaForm` |
 | `MediaPickerInput.tsx` | Full media upload + library picker (see below) |
+| `BlocksFieldInput.tsx` | Nested block instance list with Add/Remove/Reorder; fetches schemas for allowed block slugs |
+
+**SchemaForm layout logic:**
+
+- If `hasUIMetadata(schema)` is `true`: renders a tabbed layout built from `buildFormLayout(schema)`. Each tab contains sections; each section renders fields in a `flex-wrap` grid where `widthToStyle(field.ui.width)` sets the inline width. The tab bar is hidden when there is only one tab; section headers are hidden for trivial single `'General'` sections.
+- Otherwise: renders fields in a flat column (unchanged behavior for schemas without UI metadata).
+
+In both layouts, `evaluateConditions(field.conditions, field.conditionMode, currentData)` is called before rendering each field. If it returns `false`, the field is skipped (not rendered). Its saved value is preserved in `data`; only orphaned keys absent from the schema are cleaned.
+
+**BlocksFieldInput behavior:**
+
+- On mount, batch-fetches schemas for all `allowedBlocks` slugs via `GET /api/block-definitions?where[slug][in][0]=slug1&where[slug][in][1]=slug2&depth=2`
+- Stores schemas in `Record<string, BlockSchema | null>` where `null` = fetched but not found
+- Each block instance renders as a collapsible card with a `SchemaForm` inside
+- "Add Block" button opens a dropdown listing allowed slugs; selecting one appends a new `NestedBlockValue` with a generated `id`
+- Supports collapse toggle, move up/down, and remove per block instance
+- Dropdown closes on outside click via a `useEffect` click-outside handler
 
 **Two-step upload flow in `MediaPickerInput`:**
 1. User selects file → local preview via `URL.createObjectURL()` + inline alt text input shown
@@ -545,19 +740,21 @@ payload/
     │   └── ...
     │
     ├── validation/
-    │   ├── types.ts                     # BlockSchema & field types
+    │   ├── types.ts                     # BlockSchema, field types, ConditionRule, ValidationRules, UIMetadata, BlocksField, NestedBlockValue
     │   ├── schemaValidator.ts           # validateBlockSchema()
-    │   ├── dataValidator.ts             # validateBlockData()
+    │   ├── dataValidator.ts             # validateBlockData(), mergeValidation()
+    │   ├── evaluateConditions.ts        # evaluateConditions()
     │   └── index.ts
     │
     ├── builder/
     │   ├── normalizer.ts                # normaliseSchema()
     │   ├── saveSchema.ts                # saveSchemaLocally() & HTTP
+    │   ├── buildFormLayout.ts           # buildFormLayout(), hasUIMetadata(), widthToStyle()
     │   └── index.ts
     │
     ├── renderer/
     │   ├── registry.ts                  # BlockRegistry singleton
-    │   ├── DynamicRenderer.tsx          # Main page renderer
+    │   ├── DynamicRenderer.tsx          # DynamicRenderer + NestedBlocksRenderer
     │   ├── FieldRenderer.tsx            # Field-by-field rendering
     │   ├── FallbackRenderer.tsx         # Fallback for missing blocks
     │   ├── types.ts
@@ -566,16 +763,17 @@ payload/
     ├── components/
     │   ├── SchemaBuilderField/
     │   │   ├── index.tsx                # Root schema builder component
-    │   │   ├── FieldRow.tsx             # Single field editor card
+    │   │   ├── FieldRow.tsx             # Single field editor (18 types; conditions/validation/ui panels)
     │   │   ├── OptionsEditor.tsx        # select/multiselect options list
     │   │   └── NestedFieldsEditor.tsx   # Recursive nested fields (array/group)
     │   └── BlockDataField/
     │       ├── index.tsx                # Root data form component
-    │       ├── SchemaForm.tsx           # Renders schema.fields[]
-    │       ├── FieldInput.tsx           # Switch on field.type
+    │       ├── SchemaForm.tsx           # Conditional + tabbed/grid layout rendering
+    │       ├── FieldInput.tsx           # Switch on field.type (18 types)
     │       ├── ArrayFieldInput.tsx      # Repeatable row editor
     │       ├── GroupFieldInput.tsx      # Nested object editor
-    │       └── MediaPickerInput.tsx     # Upload + library picker for image/file
+    │       ├── MediaPickerInput.tsx     # Upload + library picker for image/file
+    │       └── BlocksFieldInput.tsx     # Nested block instance list for 'blocks' fields
     │
     └── blocks/
         ├── HeroBanner/index.tsx
@@ -597,8 +795,8 @@ Block schemas are immutable version documents. Schema updates create a new versi
 `BlockRegistry` singleton maps block slugs to React components at runtime. No build-time code generation. If a component is missing, `FallbackRenderer` renders the data field-by-field — the page never crashes.
 
 ### 3. Validation Split
-- **Schema validation** (strict): structure, types, constraints
-- **Data validation** (against schema): instance values at save/preview time
+- **Schema validation** (strict): structure, types, constraints, conditions, validation rules, UI metadata
+- **Data validation** (against schema): instance values at save/preview time, with `mergeValidation()` merging direct field props with `validation.*`
 - **Normalization** (lenient): pre-processes raw input before strict validation
 
 ### 4. Depth-Based Relationship Fetching
@@ -609,6 +807,15 @@ Payload 3.x allows replacing any field's admin UI with a React component via `ad
 
 ### 6. Transaction-Safe Hooks
 `afterChange` hooks pass `req` to all `payload.update()` calls so they share the same DB transaction. This prevents FK violations when the version INSERT and definition UPDATE must be atomic.
+
+### 7. Conditional Field Visibility
+Fields with `conditions` are evaluated live in `SchemaForm` before rendering. Conditions read sibling field values via dot-notation paths. Hidden fields are not rendered but their saved values are preserved — only keys absent from the schema are cleaned. This separates display logic from persistence.
+
+### 8. Progressive UI Enhancement
+`SchemaForm` checks `hasUIMetadata(schema)` before rendering. Schemas without any layout-affecting `ui` metadata continue rendering in the original flat column layout with zero behavior change. Only schemas that deliberately set `ui.tab`, `ui.section`, `ui.width`, or `ui.order` activate the tabbed grid layout. This guards all pre-existing schemas from accidental regressions.
+
+### 9. Nested/Composable Blocks
+The `'blocks'` field type enables block composition. `BlocksFieldInput` fetches nested block schemas at runtime using Payload REST batch queries. `NestedBlocksRenderer` on the frontend renders nested blocks via the same registry as top-level blocks, with a configurable depth cap (default 3) to prevent infinite recursion.
 
 ---
 
@@ -637,6 +844,9 @@ GET /about-us
       → registry.get(blockDefinition.slug)
       → <HeroBannerBlock data={...} schema={...} />
          or <FallbackRenderer /> if unregistered
+      → if block contains a 'blocks' field:
+         → <NestedBlocksRenderer blocks={data.children} />
+            → registry.get(nestedBlock.blockType) per child
   → <RenderContentBlocks blocks={page.contentBlocks} />
       → switch on block.blockType → <TestimonialsBlockView />
 ```
@@ -650,6 +860,19 @@ POST /api/blocks/save (updated schema)
 
 New pages → use v2 automatically
 Old pages → still pinned to v1, render with original schema, no migration needed
+```
+
+### Admin Data Entry with Conditions
+
+```
+Editor opens page block instance
+  → BlockDataField fetches schema for pinned blockVersion
+  → SchemaForm checks hasUIMetadata(schema)
+      → flat layout (no ui metadata) or tabbed grid layout
+  → per field: evaluateConditions(field.conditions, mode, currentData)
+      → false → field not rendered (value preserved in data)
+      → true  → FieldInput rendered
+  → onChange → setValue → Payload field value updated
 ```
 
 ---

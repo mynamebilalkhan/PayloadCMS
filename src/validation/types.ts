@@ -18,8 +18,81 @@ export type FieldType =
   | 'group'
   | 'relationship'
   | 'json'
+  | 'blocks'
 
-// ─── Field Definitions ────────────────────────────────────────────────────────
+// ─── Feature 1: Conditional Logic ────────────────────────────────────────────
+
+export type ConditionOperator =
+  | 'equals'
+  | 'not_equals'
+  | 'contains'
+  | 'not_contains'
+  | 'greater_than'
+  | 'less_than'
+  | 'in'
+  | 'not_in'
+  | 'exists'
+  | 'empty'
+
+export interface ConditionRule {
+  /** Name of the sibling field to read from (dot-notation supported for nested). */
+  field: string
+  operator: ConditionOperator
+  /** Comparison value. Not used for 'exists' / 'empty' operators. */
+  value?: unknown
+}
+
+// ─── Feature 2: Advanced Validation Rules ────────────────────────────────────
+
+export interface ValidationRules {
+  /** Override / supplement field.required */
+  required?: boolean
+  /** Text / textarea minimum character count */
+  minLength?: number
+  /** Text / textarea maximum character count */
+  maxLength?: number
+  /** Regular expression the value must match (text / textarea / url / email) */
+  regex?: string
+  /** Number minimum value */
+  min?: number
+  /** Number maximum value */
+  max?: number
+  /** Number must be a multiple of this value */
+  step?: number
+  /** Number must be an integer */
+  integerOnly?: boolean
+  /** Array minimum row count */
+  minRows?: number
+  /** Array maximum row count */
+  maxRows?: number
+  /** Array items must be unique (shallow JSON equality) */
+  uniqueItems?: boolean
+  /** Allowed MIME types for file fields (e.g. ["image/*", "application/pdf"]) */
+  allowedMimeTypes?: string[]
+  /** Maximum file size in bytes */
+  maxFileSize?: number
+  /** Maximum number of selections for multiselect fields */
+  maxSelections?: number
+}
+
+// ─── Feature 3: Visual UI Metadata ───────────────────────────────────────────
+
+export type UIWidth = 'full' | 'half' | 'third' | 'quarter'
+
+export interface UIMetadata {
+  /** Admin tab this field belongs to (creates a tab if it doesn't exist) */
+  tab?: string
+  /** Section within the tab (creates a section if it doesn't exist) */
+  section?: string
+  /** Responsive width hint for the admin grid */
+  width?: UIWidth
+  /** Whether this field's section starts collapsed */
+  collapsed?: boolean
+  /** Sort order within its section (lower = first; unset fields go last) */
+  order?: number
+}
+
+// ─── Base Field ───────────────────────────────────────────────────────────────
 
 export interface BaseField {
   name: string
@@ -31,9 +104,20 @@ export interface BaseField {
     readOnly?: boolean
     hidden?: boolean
     placeholder?: string
-    condition?: string // serialised condition expression (safe eval via predicate map)
+    /** Serialised legacy condition expression (kept for backward compat). */
+    condition?: string
   }
+  /** Feature 1 — show this field only when all/any conditions pass. */
+  conditions?: ConditionRule[]
+  /** Feature 1 — how to combine multiple conditions (default: 'AND'). */
+  conditionMode?: 'AND' | 'OR'
+  /** Feature 2 — consolidated validation rules (supplement or override per-type rules). */
+  validation?: ValidationRules
+  /** Feature 3 — admin layout metadata for tab/section/width/order. */
+  ui?: UIMetadata
 }
+
+// ─── Leaf Field Types ─────────────────────────────────────────────────────────
 
 export interface TextField extends BaseField {
   type: 'text'
@@ -131,6 +215,37 @@ export interface JsonField extends BaseField {
   type: 'json'
 }
 
+// ─── Feature 4: Nested / Composable Blocks ────────────────────────────────────
+
+/**
+ * A field that holds an array of nested block instances.
+ * Each instance references a registered block slug and carries its own data.
+ */
+export interface BlocksField extends BaseField {
+  type: 'blocks'
+  /** Slugs of allowed block definitions. If omitted, all registered blocks are allowed. */
+  allowedBlocks?: string[]
+  /** Minimum number of block instances required. */
+  minBlocks?: number
+  /** Maximum number of block instances allowed. */
+  maxBlocks?: number
+}
+
+/**
+ * A single nested block value stored inside a 'blocks' field.
+ * This is lighter than PopulatedBlockInstance — no DB relationships required.
+ */
+export interface NestedBlockValue {
+  /** Stable client-generated ID (used as React key). */
+  id?: string
+  /** The registered block slug (e.g. 'hero-banner'). */
+  blockType: string
+  /** Field data for this block instance. */
+  data: BlockData
+}
+
+// ─── Block Field Union ────────────────────────────────────────────────────────
+
 export type BlockField =
   | TextField
   | TextareaField
@@ -149,16 +264,17 @@ export type BlockField =
   | GroupField
   | RelationshipField
   | JsonField
+  | BlocksField
 
 // ─── Block Schema ─────────────────────────────────────────────────────────────
 
 export interface BlockSchema {
   fields: BlockField[]
-  /** Optional layout hints for the admin UI */
+  /** Optional layout hint for the admin UI. */
   layout?: 'default' | 'sidebar' | 'tabs'
 }
 
-// ─── Validation Result ────────────────────────────────────────────────────────
+// ─── Validation Results ───────────────────────────────────────────────────────
 
 export interface ValidationResult {
   valid: boolean

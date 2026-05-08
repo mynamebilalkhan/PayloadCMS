@@ -1,10 +1,11 @@
 'use client'
 
 import React from 'react'
-import type { BlockField, SelectField, MultiSelectField, ArrayField, GroupField } from '@/validation/types'
+import type { BlockField, SelectField, MultiSelectField, ArrayField, GroupField, BlocksField, NestedBlockValue } from '@/validation/types'
 import { ArrayFieldInput } from './ArrayFieldInput'
 import { GroupFieldInput } from './GroupFieldInput'
 import { MediaPickerInput } from './MediaPickerInput'
+import { BlocksFieldInput } from './BlocksFieldInput'
 
 type Props = {
   field: BlockField
@@ -355,6 +356,21 @@ export function FieldInput({ field, value, onChange, readOnly }: Props) {
           />
         </FieldWrapper>
       )
+
+    // Feature 4: Nested / Composable Blocks
+    case 'blocks': {
+      const bf = field as BlocksField
+      return (
+        <FieldWrapper label={bf.label} required={bf.required} description={bf.admin?.description}>
+          <BlocksFieldInput
+            field={bf}
+            value={Array.isArray(value) ? (value as NestedBlockValue[]) : []}
+            onChange={onChange}
+            readOnly={disabled}
+          />
+        </FieldWrapper>
+      )
+    }
 
     default:
       return null
