@@ -1,15 +1,22 @@
-# Architecture: Payload Dynamic Blocks CMS
+# Architecture: PayloadCMS App
 
 ## Overview
 
-A Payload CMS 3.76 + Next.js 15 App Router project implementing a **runtime dynamic block system** — similar to Gutenberg, but with block schemas stored in the database rather than hardcoded TypeScript. Pages compose layouts from block instances pinned to specific schema versions, enabling safe schema evolution without breaking existing content.
+A Payload CMS 3.76 + Next.js 15 App Router project for managing site pages with a dynamic block architecture. The codebase currently has two page-authoring paths:
+
+- A **runtime versioned block system** where block schemas live in the database. Pages store block instances that pin to immutable schema versions, so schema changes do not break existing content.
+- A newer **Payload-native page authoring path** in `Pages.ts` that adds a `hero` group and a Payload `blocks` field for configured blocks such as `Testimonials`.
+
+The runtime block path is the one currently rendered by the frontend route. The Payload-native hero/static block fields are configured in the CMS but are not yet wired into `src/app/(frontend)/[[...slug]]/page.tsx`.
 
 **Stack:**
-- Backend: Payload CMS 3.76 with PostgreSQL adapter
+- Backend: Payload CMS 3.76.0 with PostgreSQL adapter
 - Frontend: Next.js 15 (App Router)
 - Database: PostgreSQL (via `postgresAdapter`)
-- Package Manager: pnpm (ESM module, Node 18.20+ or 20.9+)
+- Package manager: pnpm 10.x (ESM module, Node 18.20.2+ or 20.9+)
 - Runtime: React 19.2.1, TypeScript 5.7.3, Tailwind CSS 4.x
+- Rich text: Payload Lexical editor
+- Media processing: Sharp
 
 ---
 
@@ -56,16 +63,16 @@ Write-once schema snapshots. Each schema change creates a new version document; 
 
 ---
 
-### 3. `pages` — Dynamic Page Layouts
+### 3. `pages` — Page Content
 **File:** `src/collections/Pages.ts`
 
-Page metadata plus a dynamic `layout` array of block instances.
+Page metadata plus authoring fields for both the runtime block system and the newer Payload-native content model.
 
 **Meta fields:** `title`, `slug` (auto-normalized), `status` (`draft` / `published` / `archived`)
 
-**SEO group:** `metaTitle`, `metaDescription`, `ogImage` (upload), `noIndex`
+**SEO group:** `seo.metaTitle`, `seo.metaDescription`, `seo.ogImage` (upload), `seo.noIndex`
 
-**Layout array (block instances):**
+**Top-level runtime `dbLayout` array (rendered by `DynamicRenderer`):**
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -77,14 +84,53 @@ Page metadata plus a dynamic `layout` array of block instances.
 | `hidden` | checkbox | Hide on frontend without deleting |
 | `anchor` | text | HTML anchor ID for deep-linking |
 
-**Key design:** Pages pin to a specific `blockVersion` per instance — schema updates never break existing content.
+**Key design:** Pages pin to a specific `blockVersion` per instance. Schema updates create new versions and do not mutate already-authored page instances.
+
+**Payload-native fields also present on each page (all three now rendered):**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `hero` | group | Shared hero field from `src/heros/config.ts`; rendered via `<RenderHero />` |
+| `contentBlocks` | blocks array | Payload blocks field allowing `Testimonials`; rendered via `<RenderContentBlocks />` |
+
+**Access and hooks:**
+- Public reads are limited to `status: 'published'`; authenticated users can read drafts.
+- `beforeChange` normalizes slugs to lowercase path-safe strings.
+
+---
+
+### Payload-Native Hero Field
+**File:** `src/heros/config.ts`
+
+The `hero` group supports four render types:
+
+| Type | Renderer |
+|------|----------|
+| `none` | No hero |
+| `highImpact` | `src/heros/HighImpact/index.tsx` |
+| `mediumImpact` | `src/heros/MediumImpact/index.tsx` |
+| `lowImpact` | `src/heros/LowImpact/index.tsx` |
+
+Hero content includes Lexical rich text, up to two CTA links via `linkGroup()`, and a required media upload for high/medium impact variants. `src/heros/RenderHero.tsx` selects the renderer by `hero.type` and is rendered at the top of every page via `<RenderHero hero={page.hero} />`.
+
+---
+
+### Payload-Native Testimonials Block
+**File:** `src/blocks/Generic/Testimonials/config.ts`
+
+`Testimonials` is a standard Payload `Block` with an `items` array. Each item stores `name`, `company`, and `testimonial`. It is registered in the `contentBlocks` Payload blocks field in `Pages.ts` and rendered on the frontend by `RenderContentBlocks`.
+
+### RenderContentBlocks
+**File:** `src/blocks/RenderContentBlocks.tsx`
+
+`RenderContentBlocks({ blocks })` renders the Payload-native `contentBlocks` array. It switches on `block.blockType` and delegates to the appropriate view component. Currently handles `'testimonials'` blocks; unknown block types render nothing (no crash). Rendered at the bottom of every page below `DynamicRenderer`.
 
 ---
 
 ### 4. `media` — Image & File Uploads
 **File:** `src/collections/Media.ts`
 
-Image resizing via Sharp. Image sizes: `thumbnail` (400×300), `card` (768×1024), `tablet` (1024×auto).
+Public image uploads with required `alt` text and optional `caption`. Image resizing is handled via Sharp. Image sizes: `thumbnail` (400×300), `card` (768×1024), `tablet` (1024×auto). Uploads are limited to `image/*` and use `thumbnail` as the admin thumbnail.
 
 ---
 
@@ -188,6 +234,14 @@ registry.registerMany({ ... })
 
 **Registration:** `src/blocks/registry-setup.ts` — import once in the frontend entry point (`src/app/(frontend)/layout.tsx`).
 
+Current registered runtime block components:
+
+| Slug | Component |
+|------|-----------|
+| `hero-banner` | `HeroBannerBlock` |
+| `rich-text` | `RichTextBlock` |
+| `card-grid` | `CardGridBlock` |
+
 ### DynamicRenderer
 **File:** `src/renderer/DynamicRenderer.tsx`
 
@@ -238,7 +292,7 @@ Saves / publishes block schemas to the DB. Requires Bearer token auth.
 ### `POST /api/blocks/preview`
 **File:** `src/app/api/blocks/preview/route.ts`
 
-Validates block instance data and returns schema for admin preview. Requires Payload session auth.
+Validates block instance data and returns the schema/data pair for an admin preview client. Requires Payload session auth.
 
 ```ts
 // Request
@@ -247,6 +301,24 @@ Validates block instance data and returns schema for admin preview. Requires Pay
 // Response
 { valid: true, schema: BlockSchema, data: Record<string, unknown> }
 ```
+
+### Payload REST API
+**File:** `src/app/(payload)/api/[...slug]/route.ts`
+
+Payload's generated REST handlers expose collection and auth endpoints through the App Router.
+
+```ts
+export const GET = REST_GET(config)
+export const POST = REST_POST(config)
+export const DELETE = REST_DELETE(config)
+export const PATCH = REST_PATCH(config)
+export const OPTIONS = REST_OPTIONS(config)
+```
+
+### Payload GraphQL API
+**File:** `src/app/(payload)/api/graphql/route.ts`
+
+GraphQL is enabled with `GRAPHQL_POST(config)` and the playground GET route. The generated schema is written to `generated-schema.graphql`.
 
 ---
 
@@ -263,8 +335,9 @@ Validates block instance data and returns schema for admin preview. Requires Pay
 
 - Fetches page with `depth: 3` (populates nested relationships)
 - Filters by `status: 'published'`
-- Passes layout to `<DynamicRenderer />`
-- `generateStaticParams()` pre-renders all published pages
+- Generates metadata from `page.seo.metaTitle`, `page.seo.metaDescription`, and `page.seo.noIndex`
+- Renders all three content areas in order: `<RenderHero hero={page.hero} />`, `<DynamicRenderer layout={page.dbLayout} />`, `<RenderContentBlocks blocks={page.contentBlocks} />`
+- `generateStaticParams()` pre-renders up to 200 published pages and returns `[]` if the DB is unavailable during build/dev cold-start
 
 ---
 
@@ -274,14 +347,31 @@ Validates block instance data and returns schema for admin preview. Requires Pay
 
 ```ts
 buildConfig({
-  serverURL: process.env.NEXT_PUBLIC_SERVER_URL,
+  serverURL: process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000',
+  admin: {
+    user: 'users',
+    importMap: { baseDir: path.resolve(dirname) },
+    meta: { titleSuffix: '— Block System' },
+  },
   collections: [BlockDefinitions, BlockDefinitionVersions, Pages, Media, Users],
   editor: lexicalEditor({}),
-  db: postgresAdapter({ pool: { connectionString: process.env.DATABASE_URI } }),
+  db: postgresAdapter({
+    pool: {
+      connectionString:
+        process.env.DATABASE_URI ?? 'postgresql://localhost:5432/payload_dynamic_blocks',
+    },
+  }),
   sharp,
-  secret: process.env.PAYLOAD_SECRET,
+  secret: process.env.PAYLOAD_SECRET ?? 'CHANGE_ME_IN_PRODUCTION',
+  typescript: { outputFile: path.resolve(dirname, 'payload-types.ts') },
+  graphQL: { schemaOutputFile: path.resolve(dirname, 'generated-schema.graphql') },
 })
 ```
+
+### Next.js Configuration
+**File:** `next.config.mjs`
+
+Next is wrapped with `withPayload(nextConfig)`. Image optimization currently allows remote images from `http://localhost`.
 
 ---
 
@@ -401,7 +491,7 @@ Uses pre-built CSS (`@payloadcms/next/css`) — no Sass required.
 payload/
 ├── payload.config.ts
 ├── package.json
-├── next.config.js
+├── next.config.mjs
 ├── postcss.config.mjs
 ├── architecture.md
 │
@@ -414,6 +504,7 @@ payload/
     │   ├── (payload)/
     │   │   ├── admin/[[...segments]]/   # Payload admin UI
     │   │   ├── api/[...slug]/route.ts   # Payload API catch-all
+    │   │   ├── api/graphql/route.ts     # Payload GraphQL route
     │   │   └── layout.tsx               # Admin root layout (RootLayout)
     │   └── api/
     │       └── blocks/
@@ -426,6 +517,32 @@ payload/
     │   ├── Pages.ts
     │   ├── Media.ts
     │   └── index.ts
+    │
+    ├── heros/
+    │   ├── config.ts                    # Payload-native hero group field
+    │   ├── RenderHero.tsx               # Selects hero renderer by type
+    │   ├── HighImpact/index.tsx
+    │   ├── MediumImpact/index.tsx
+    │   └── LowImpact/index.tsx
+    │
+    ├── fields/
+    │   ├── defaultLexical.ts            # Shared Lexical editor config
+    │   ├── link.ts                      # Link group field
+    │   └── linkGroup.ts                 # CTA links array field
+    │
+    ├── hooks/
+    │   ├── populateBlockData.ts
+    │   ├── populatePublishedAt.ts
+    │   └── revalidateRedirects.ts
+    │
+    ├── utilities/
+    │   ├── deepMerge.ts
+    │   ├── generateMeta.ts
+    │   ├── getDocument.ts
+    │   ├── getGlobals.ts
+    │   ├── getMediaUrl.ts
+    │   ├── getRedirects.ts
+    │   └── ...
     │
     ├── validation/
     │   ├── types.ts                     # BlockSchema & field types
@@ -464,6 +581,8 @@ payload/
         ├── HeroBanner/index.tsx
         ├── RichText/index.tsx
         ├── CardGrid/index.tsx
+        ├── Generic/Testimonials/config.ts
+        ├── RenderContentBlocks.tsx      # Renders Payload-native contentBlocks array
         └── registry-setup.ts           # Central block registration
 ```
 
@@ -511,10 +630,15 @@ POST /api/blocks/save
 ```
 GET /about-us
   → getPage("about-us") with depth: 3
-  → <DynamicRenderer layout={...} />
+  → generateMetadata() from page.seo
+  → <RenderHero hero={page.hero} />
+      → selects HighImpact / MediumImpact / LowImpact by hero.type
+  → <DynamicRenderer layout={page.dbLayout} />
       → registry.get(blockDefinition.slug)
       → <HeroBannerBlock data={...} schema={...} />
          or <FallbackRenderer /> if unregistered
+  → <RenderContentBlocks blocks={page.contentBlocks} />
+      → switch on block.blockType → <TestimonialsBlockView />
 ```
 
 ### Schema Evolution (Backward-Compatible)
@@ -530,6 +654,15 @@ Old pages → still pinned to v1, render with original schema, no migration need
 
 ---
 
+## Current Integration Notes
+
+- `src/app/(frontend)/[[...slug]]/page.tsx` renders all three content areas per page: hero (Payload-native), `dbLayout` (runtime versioned blocks via `DynamicRenderer`), and `contentBlocks` (Payload-native via `RenderContentBlocks`).
+- `src/blocks/registry-setup.ts` contains temporary debug `fetch()` instrumentation around registry initialization. The actual registered runtime components are `hero-banner`, `rich-text`, and `card-grid`.
+- Some hero renderers import app-shell components/providers such as `@/components/Link`, `@/components/Media`, `@/components/RichText`, and `@/providers/HeaderTheme`. Those supporting files are not present in the project tree and may require follow-up integration work before the hero path builds cleanly.
+- `src/hooks/populateBlockData.ts` references `@/blocks/Homepage/populateRatings`, which does not exist and is not currently attached to `Pages.ts`.
+
+---
+
 ## Environment Variables
 
 ```env
@@ -541,10 +674,17 @@ PAYLOAD_SECRET=your-secret-here
 ## Scripts
 
 ```bash
-pnpm dev              # Start dev server
-pnpm build            # Production build
-pnpm start            # Start production server
-pnpm seed             # Seed initial block definitions
-pnpm migrate:create   # Create DB migration
-pnpm migrate:run      # Apply migrations
+pnpm dev                 # Start Next dev server
+pnpm build               # Production build
+pnpm start               # Start production server
+pnpm dev:prod            # Clean build and run production server locally
+pnpm lint                # Next lint
+pnpm lint:fix            # Next lint with fixes
+pnpm payload             # Run Payload CLI
+pnpm generate:importmap  # Regenerate Payload admin import map
+pnpm generate:types      # Regenerate payload-types.ts
+pnpm seed                # Seed initial block definitions
+pnpm migrate:create      # Create DB migration
+pnpm migrate:run         # Apply migrations
+pnpm migrate:status      # Check migration status
 ```

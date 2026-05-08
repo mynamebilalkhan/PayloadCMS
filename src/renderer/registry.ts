@@ -1,5 +1,3 @@
-'use client'
-
 import type { BlockComponent, RegistryEntry } from './types'
 
 /**

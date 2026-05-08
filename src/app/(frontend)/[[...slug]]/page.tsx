@@ -3,6 +3,8 @@ import { getPayload } from 'payload'
 import config from '@payload-config'
 import { DynamicRenderer } from '@/renderer'
 import type { PopulatedBlockInstance } from '@/renderer'
+import { RenderContentBlocks } from '@/blocks/RenderContentBlocks'
+import { RenderHero } from '@/heros/RenderHero'
 import type { Metadata } from 'next'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,11 +82,13 @@ export default async function FrontendPage({ params }: { params: Params }) {
   const page = await getPage(slug)
   if (!page) notFound()
 
-  const layout = (page.layout ?? []) as unknown as PopulatedBlockInstance[]
+  const dbLayout = (page.dbLayout ?? []) as unknown as PopulatedBlockInstance[]
 
   return (
     <main>
-      <DynamicRenderer layout={layout} />
+      <RenderHero hero={page.hero} />
+      <DynamicRenderer layout={dbLayout} />
+      <RenderContentBlocks blocks={page.contentBlocks} />
     </main>
   )
 }

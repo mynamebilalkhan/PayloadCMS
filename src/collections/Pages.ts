@@ -1,5 +1,14 @@
 import type { CollectionConfig } from 'payload'
 
+import { Testimonials } from '@/blocks/Generic/Testimonials/config'
+import { hero } from '../heros/config'
+
+// import { OverviewField } from "@/fields/OverviewField";
+// import { MetaTitleField } from "@/fields/MetaTitleField";
+// import { MetaImageField } from "@/fields/MetaImageField";
+// import { MetaDescriptionField } from "@/fields/MetaDescriptionField";
+// import { PreviewField } from "@/fields/PreviewField";
+
 /**
  * pages: stores page content as a dynamic array of block instances.
  *
@@ -108,12 +117,14 @@ export const Pages: CollectionConfig = {
         },
       ],
     },
-    // ─── Dynamic Layout ────────────────────────────────────────────────────
+    // ─── Page Builder ──────────────────────────────────────────────────────
     {
-      name: 'layout',
+      name: 'dbLayout',
       type: 'array',
-      label: 'Page Layout',
-      admin: { description: 'Ordered list of block instances that compose this page.' },
+      label: 'Page Builder',
+      admin: {
+        description: 'Build the page with reusable dynamic sections.',
+      },
       fields: [
         {
           name: 'blockDefinition',
@@ -187,6 +198,21 @@ export const Pages: CollectionConfig = {
           },
         },
       ],
+    },
+    // ─── Content Blocks ────────────────────────────────────────────────────
+    // hero,
+    {
+      name: 'contentBlocks',
+      type: 'blocks',
+      label: 'Content Blocks',
+      blocks: [
+        // Generic
+        Testimonials,
+      ],
+      admin: {
+        initCollapsed: true,
+        description: 'Add structured content sections to this page.',
+      },
     },
   ],
   timestamps: true,
