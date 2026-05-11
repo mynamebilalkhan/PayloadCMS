@@ -55,6 +55,19 @@ Desktop.ini
 coverage/
 .nyc_output/
 
+# Cache
+.eslintcache
+.stylelintcache
+.cache/
+.turbo/
+
+# Payload migrations lock (auto-generated; commit migrations/ itself)
+.migrations-lock
+
+# Uploads (Payload may write here in some configs)
+public/uploads/
+
 # Misc
 *.pem
+*.orig
 .vercel

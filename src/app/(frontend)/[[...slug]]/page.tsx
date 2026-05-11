@@ -1,10 +1,12 @@
 import { notFound } from 'next/navigation'
+import { draftMode } from 'next/headers'
 import { getPayload } from 'payload'
 import config from '@payload-config'
 import { DynamicRenderer } from '@/renderer'
 import type { PopulatedBlockInstance } from '@/renderer'
 import { RenderContentBlocks } from '@/blocks/RenderContentBlocks'
 import { RenderHero } from '@/heros/RenderHero'
+import { LivePreviewListener } from '@/components/LivePreviewListener'
 import type { Metadata } from 'next'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -13,15 +15,17 @@ type Params = Promise<{ slug?: string[] }>
 
 // ─── Data fetching ────────────────────────────────────────────────────────────
 
-async function getPage(slug: string) {
+async function getPage(slug: string, isDraft = false) {
   const payload = await getPayload({ config })
+
+  const where: Record<string, unknown> = { slug: { equals: slug } }
+  if (!isDraft) {
+    where.status = { equals: 'published' }
+  }
 
   const result = await payload.find({
     collection: 'pages',
-    where: {
-      slug: { equals: slug },
-      status: { equals: 'published' },
-    },
+    where,
     limit: 1,
     depth: 3, // populate blockDefinition + blockVersion relationships
   })
@@ -79,16 +83,19 @@ export default async function FrontendPage({ params }: { params: Params }) {
   // The catch-all [[...slug]] means the homepage is slug = undefined → "/"
   const slug = slugParts?.join('/') ?? '/'
 
-  const page = await getPage(slug)
+  const { isEnabled: isDraftMode } = await draftMode()
+  const page = await getPage(slug, isDraftMode)
   if (!page) notFound()
 
   const dbLayout = (page.dbLayout ?? []) as unknown as PopulatedBlockInstance[]
+  const serverURL = process.env.NEXT_PUBLIC_SERVER_URL ?? 'http://localhost:3000'
 
   return (
-    <main>
+    <>
+      {isDraftMode && <LivePreviewListener serverURL={serverURL} />}
       <RenderHero hero={page.hero} />
       <DynamicRenderer layout={dbLayout} />
       <RenderContentBlocks blocks={page.contentBlocks} />
-    </main>
+    </>
   )
 }

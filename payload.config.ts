@@ -11,6 +11,7 @@ import {
   Pages,
   Media,
 } from '@/collections'
+import { Header, Footer } from '@/globals'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -24,6 +25,19 @@ export default buildConfig({
     },
     meta: {
       titleSuffix: '— Block System',
+    },
+    livePreview: {
+      url: ({ data }) => {
+        const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL ?? 'http://localhost:3000'
+        const slug = (data?.slug as string) ?? '/'
+        return `${serverUrl}/api/draft?slug=${encodeURIComponent(slug)}`
+      },
+      collections: ['pages'],
+      breakpoints: [
+        { label: 'Mobile',  name: 'mobile',  width: 375,  height: 667  },
+        { label: 'Tablet',  name: 'tablet',  width: 768,  height: 1024 },
+        { label: 'Desktop', name: 'desktop', width: 1440, height: 900  },
+      ],
     },
   },
   collections: [
@@ -44,6 +58,7 @@ export default buildConfig({
       ],
     },
   ],
+  globals: [Header, Footer],
   editor: lexicalEditor({}),
   db: postgresAdapter({
     pool: {

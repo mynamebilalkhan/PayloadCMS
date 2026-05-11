@@ -7,7 +7,7 @@ A Payload CMS 3.76 + Next.js 15 App Router project for managing site pages with 
 - A **runtime versioned block system** where block schemas live in the database. Pages store block instances that pin to immutable schema versions, so schema changes do not break existing content.
 - A **Payload-native page authoring path** in `Pages.ts` that adds a `hero` group and a Payload `blocks` field for configured blocks such as `Testimonials`.
 
-Both paths are rendered by the frontend route. The runtime block system has been extended with four features: conditional field logic, advanced validation rules, visual UI metadata (tabbed/grid admin layout), and nested/composable blocks.
+Both paths are rendered by the frontend route. The runtime block system has been extended with four features: conditional field logic, advanced validation rules, visual UI metadata (tabbed/grid admin layout), and nested/composable blocks. The admin panel supports **Live Preview** — an embedded iframe that re-renders the frontend on every document save so editors can preview draft content in real time. The frontend shell (header, footer) is managed via **Payload Globals** and rendered in the async App Router layout.
 
 **Stack:**
 - Backend: Payload CMS 3.76.0 with PostgreSQL adapter
@@ -136,6 +136,283 @@ Public image uploads with required `alt` text and optional `caption`. Image resi
 
 ### 5. `users` — Authentication
 Inline in `payload.config.ts`. Email + name fields; used to authenticate API calls.
+
+---
+
+## Globals
+
+Payload Globals are singleton documents — one record per global, edited in the admin panel and fetched server-side on every frontend request.
+
+### Header Global
+**File:** `src/globals/Header.ts`
+
+Controls the site-wide navigation bar.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `logo` | upload → media | Optional logo image |
+| `navigationItems` | array | Top-level nav items (see below) |
+| `ctaButton` | group | `text` + `url` for the primary CTA in the nav |
+| `stickyHeader` | checkbox (default: true) | Keeps header fixed on scroll |
+
+**Navigation item fields:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `label` | text (required) | Link label |
+| `url` | text | Relative or absolute URL — optional when children are present |
+| `openInNewTab` | checkbox | |
+| `children` | array | Dropdown items: `label` (required), `url` (required), `openInNewTab` |
+
+Nav items with a non-empty `children` array render as dropdown menus on desktop and accordions on mobile. Parent items with children but no `url` act as pure dropdown triggers with no navigation of their own.
+
+---
+
+### Footer Global
+**File:** `src/globals/Footer.ts`
+
+Controls the site-wide footer.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `logo` | upload → media | Optional footer logo |
+| `columns` | array | Link columns: `heading` + `links[]` (label + url + openInNewTab) |
+| `socialLinks` | array | Platform select (`twitter`, `linkedin`, `github`, `youtube`, `instagram`, `facebook`) + `url` |
+| `copyright` | text | Copyright line |
+
+---
+
+### Globals barrel export
+**File:** `src/globals/index.ts`
+
+```ts
+export { Header } from './Header'
+export { Footer } from './Footer'
+```
+
+Both are registered in `payload.config.ts` under `globals: [Header, Footer]`.
+
+---
+
+## Frontend Layout
+
+### Root Layout
+**File:** `src/app/(frontend)/layout.tsx`
+
+An `async` server component that:
+1. Calls `getGlobals()` — parallel `Promise.all` fetch of the `header` and `footer` globals via `payload.findGlobal({ slug, depth: 1 })`
+2. Falls back to empty objects `{}` if the globals fetch fails (DB unavailable during cold-start)
+3. Renders the full page shell: `<SiteHeader>` → `<main>{children}</main>` → `<SiteFooter>`
+
+```tsx
+export default async function FrontendLayout({ children }) {
+  const { header, footer } = await getGlobals()
+  return (
+    <html lang="en"><body className="antialiased">
+      <SiteHeader logo={header.logo} navigationItems={header.navigationItems}
+        ctaButton={header.ctaButton} stickyHeader={header.stickyHeader} />
+      <main>{children}</main>
+      <SiteFooter logo={footer.logo} columns={footer.columns}
+        copyright={footer.copyright} socialLinks={footer.socialLinks} />
+    </body></html>
+  )
+}
+```
+
+Also imports `@/blocks/registry-setup` here to ensure all block components are registered before any page renders.
+
+---
+
+### SiteHeader Component
+**File:** `src/components/layout/Header.tsx`
+
+`'use client'` — needs `useState` for mobile menu and dropdown state.
+
+**Props (`SiteHeaderProps`):** `logo`, `navigationItems`, `ctaButton`, `stickyHeader`
+
+**Desktop nav:** Items with `children` render a button that toggles a `role="menu"` dropdown panel. An invisible `fixed inset-0` backdrop div closes any open dropdown on outside click without a `useEffect` listener. Items without children render as plain `<a>` links; items with a URL only and no children render as standard links; items with no URL and no children render as a `<span>`.
+
+**Mobile nav:** A hamburger button (hidden on `lg+`) toggles a full-width drawer below the header bar. Items with children render as accordions with a `border-l-2` indented sub-list. Navigating to any link closes the drawer automatically.
+
+**State:**
+- `mobileOpen: boolean` — drawer visibility
+- `openDropdown: number | null` — index of the currently open desktop dropdown
+- `openMobileSection: number | null` — index of the currently expanded mobile accordion
+
+**ChevronDown** icon accepts a `className` prop for the `rotate-180` open/close animation.
+
+---
+
+### SiteFooter Component
+**File:** `src/components/layout/Footer.tsx`
+
+Server component (no interactivity needed).
+
+Renders a four-area footer: brand column (logo + tagline), dynamic link columns from the `columns` global field, a social links row, and a copyright bar. The `SocialIcon` sub-component switches on `platform` to render the correct SVG for six platforms: Twitter/X, LinkedIn, GitHub, YouTube, Instagram, Facebook.
+
+---
+
+## Block Components
+
+All runtime block components follow the same pattern:
+
+```ts
+export function MyBlock({ data, anchor }: BlockComponentProps<MyData>) { ... }
+export const mySchema = { fields: [...] }
+```
+
+The schema export is used by `seed.ts` to register the block definition in the database. The component export is registered in the `BlockRegistry` via `registry-setup.ts`.
+
+### HeroBanner
+**File:** `src/blocks/HeroBanner/index.tsx`
+
+Full-width two-column hero section.
+
+| Field | Notes |
+|-------|-------|
+| `badge` | Announcement pill above the heading |
+| `heading` | Main heading text (required) |
+| `headingHighlight` | Word or phrase rendered in indigo with a highlight underbar |
+| `description` | Subheading paragraph |
+| `primaryCtaLabel` / `primaryCtaUrl` | Filled indigo CTA button |
+| `secondaryCtaLabel` / `secondaryCtaUrl` | Ghost outline button with play icon |
+| `mockupImage` | Optional screenshot — falls back to CSS `DashboardMockup` component |
+| `socialProofText` | Text beside avatar stack and star rating |
+
+Visual details: ambient blobs (`blur-3xl`), floating notification cards (deployment success + collaborator joined), glow behind the mockup card. `DashboardMockup` is a pure decorative component built entirely with Tailwind height/color classes — no inline styles.
+
+---
+
+### RichText
+**File:** `src/blocks/RichText/index.tsx`
+
+| Field | Notes |
+|-------|-------|
+| `content` | HTML string rendered via `dangerouslySetInnerHTML` |
+| `alignment` | `left` / `center` / `right` — controls text alignment and container margin |
+
+Applies Tailwind `prose` with custom overrides: indigo-tinted links, blockquote background fill, code pill styling, colored list markers. `max-w-3xl` inner container constrains line length; `center` alignment applies `mx-auto` to center the block.
+
+---
+
+### CardGrid
+**File:** `src/blocks/CardGrid/index.tsx`
+
+| Field | Notes |
+|-------|-------|
+| `heading` | Section heading |
+| `subheading` | Optional paragraph below the heading |
+| `columns` | Select: `'2'` / `'3'` / `'4'` (string values matching the seed schema) |
+| `cards[]` | `title` (required), `description`, `image`, `linkUrl`, `linkLabel` |
+
+Cards display a colored accent bar at the top (cycling through 6 colors: indigo, violet, sky, emerald, amber, rose). When no image is provided, a matching colored icon circle appears. Cards hover-lift (`-translate-y-1`) and deepen shadow. A link arrow appears at the bottom when `linkUrl` + `linkLabel` are set.
+
+---
+
+### Features
+**File:** `src/blocks/Features/index.tsx`
+
+Icon-based feature grid with 5 layout variants.
+
+| Field | Notes |
+|-------|-------|
+| `variant` | `default` / `minimal` / `dark` / `gradient` / `cards` |
+| `sectionLabel` | Small tag rendered above the heading |
+| `heading` | Section heading |
+| `subheading` | Optional subtitle paragraph |
+| `columns` | `'2'` / `'3'` / `'4'` — responsive grid columns |
+| `features[]` | `title`, `description`, `icon` (16 named SVG icons) |
+
+Icon map `iconPaths` covers 16 inline SVG options: `zap`, `shield`, `layers`, `globe`, `code`, `chart`, `settings`, `star`, `heart`, `check`, `rocket`, `puzzle`, `users`, `mail`, `lock`, `cpu`. Unknown names fall back to `zap`.
+
+---
+
+### CTA
+**File:** `src/blocks/CTA/index.tsx`
+
+Call-to-action section with 6 style variants and two layout modes.
+
+| Field | Notes |
+|-------|-------|
+| `variant` | `default` / `minimal` / `dark` / `gradient` / `brand` / `glass` |
+| `layout` | `centered` / `split` |
+| `eyebrow` | Small label above heading |
+| `heading` | Main heading text |
+| `description` | Supporting paragraph |
+| `primaryCtaLabel` / `primaryCtaUrl` | Primary action button |
+| `secondaryCtaLabel` / `secondaryCtaUrl` | Secondary ghost/outline button |
+
+The `glass` variant uses `backdrop-blur-xl bg-white/5 border-white/10`. Gradient and brand variants add decorative ambient glow blobs (`blur-3xl opacity-20`).
+
+---
+
+### Testimonials
+**File:** `src/blocks/Testimonials/index.tsx`
+
+Customer testimonial grid. Server component — no client state needed.
+
+| Field | Notes |
+|-------|-------|
+| `variant` | `default` / `featured` / `dark` |
+| `sectionLabel` | Tag above heading |
+| `heading` | Section heading |
+| `subheading` | Optional subtitle |
+| `testimonials[]` | `quote`, `name`, `title`, `company`, `rating` (select `'3'`/`'4'`/`'5'`) |
+
+`featured` variant: first testimonial rendered large in the left column; items 1–2 stacked in the right column. Star rating clamped to 1–5 range. Avatar initials fallback: first letter of each name word.
+
+---
+
+### FAQ
+**File:** `src/blocks/FAQ/index.tsx`
+
+Accordion FAQ block. `'use client'` — uses `useState` for open/close accordion state.
+
+| Field | Notes |
+|-------|-------|
+| `variant` | `default` / `minimal` / `dark` |
+| `layout` | `single-column` / `two-column` |
+| `sectionLabel` | Small tag above heading |
+| `heading` | Section heading |
+| `subheading` | Optional subtitle |
+| `items[]` | `question`, `answer` |
+
+`flush` variant: `border-0 border-b rounded-none` — divider lines only. Two-column layout uses `grid sm:grid-cols-2`. `ChevronIcon` animates `rotate-180` when open. Only one item open at a time; clicking an open item closes it.
+
+---
+
+### Pricing
+**File:** `src/blocks/Pricing/index.tsx`
+
+Pricing plan cards with highlighted plan support and 4 style variants.
+
+| Field | Notes |
+|-------|-------|
+| `variant` | `default` / `gradient` / `dark` / `minimal` |
+| `sectionLabel` | Tag above heading |
+| `heading` | Section heading |
+| `subheading` | Optional subtitle |
+| `plans[]` | `name`, `description`, `price`, `period`, `badge`, `highlighted` (boolean), `features[]` (`{ text }[]`), `ctaLabel`, `ctaUrl` |
+
+The variant map has parallel keys for highlighted vs non-highlighted plans: `card`/`cardHL`, `cta`/`ctaHL`, etc. Grid columns auto-determined by `plans.length`. `CheckIcon` uses `stroke` (not `fill`) for a clean checkmark.
+
+---
+
+### Block Registration
+**File:** `src/blocks/registry-setup.ts`
+
+```ts
+registry.register('hero-banner',  HeroBannerBlock)
+registry.register('rich-text',    RichTextBlock)
+registry.register('card-grid',    CardGridBlock)
+registry.register('features',     FeaturesBlock)
+registry.register('cta',          CTABlock)
+registry.register('testimonials', TestimonialsBlock)
+registry.register('faq',          FAQBlock)
+registry.register('pricing',      PricingBlock)
+```
+
+Imported once in `src/app/(frontend)/layout.tsx`.
 
 ---
 
@@ -351,6 +628,8 @@ Maps width values to CSS calc strings:
 4. Creates immutable `BlockDefinitionVersion`
 5. Returns `{ success, definitionId, versionId, versionNumber, errors, warnings }`
 
+Note: `definitionId` and `versionId` are returned as strings via `String(id)`. For Postgres, relationship fields require integer IDs — use `parseInt(id, 10)` before passing to `payload.create()`.
+
 **`saveSchemaViaHttp(request, options)`** — For external tools (CLI, browser): POSTs to `/api/blocks/save` with Bearer token auth.
 
 ---
@@ -379,6 +658,11 @@ Current registered runtime block components:
 | `hero-banner` | `HeroBannerBlock` |
 | `rich-text` | `RichTextBlock` |
 | `card-grid` | `CardGridBlock` |
+| `features` | `FeaturesBlock` |
+| `cta` | `CTABlock` |
+| `testimonials` | `TestimonialsBlock` |
+| `faq` | `FAQBlock` |
+| `pricing` | `PricingBlock` |
 
 ### DynamicRenderer
 **File:** `src/renderer/DynamicRenderer.tsx`
@@ -400,7 +684,6 @@ Renders the value of a `blocks` schema field from inside a block component. Bloc
 
 - Enforces a maximum nesting depth (`maxDepth`, default 3) — returns `null` and warns in dev when exceeded
 - Looks up each nested block's component from the registry by `blockType`
-- Passes `schema={{ fields: [] }}` to nested components (typed nested components use their own data interfaces, not generic schema rendering)
 - Falls back to `FallbackRenderer` for unregistered nested block types
 
 ```tsx
@@ -465,6 +748,24 @@ Validates block instance data and returns the schema/data pair for an admin prev
 { valid: true, schema: BlockSchema, data: Record<string, unknown> }
 ```
 
+### `GET /api/draft`
+**File:** `src/app/api/draft/route.ts`
+
+Enables Next.js Draft Mode so the frontend can render unpublished pages inside the admin Live Preview iframe. Requires an authenticated Payload session — unauthenticated requests receive a 401.
+
+1. Authenticates the caller via `payload.auth({ headers })`
+2. Calls `draftMode().enable()` — sets the `__prerender_bypass` cookie
+3. Redirects to `/<slug>` (the actual frontend page)
+
+Called automatically by the `livePreview.url` function in `payload.config.ts` when the admin panel opens the Live Preview iframe.
+
+### `GET /api/exit-draft`
+**File:** `src/app/api/exit-draft/route.ts`
+
+Clears the Draft Mode cookie and redirects back to the page. Visiting `/api/exit-draft?slug=about-us` restores normal published-only rendering for the current browser session.
+
+---
+
 ### Payload REST API
 **File:** `src/app/(payload)/api/[...slug]/route.ts`
 
@@ -496,10 +797,12 @@ GraphQL is enabled with `GRAPHQL_POST(config)` and the playground GET route. The
 | `/about-us` | `"about-us"` |
 | `/docs/intro` | `"docs/intro"` |
 
-- Fetches page with `depth: 3` (populates nested relationships)
-- Filters by `status: 'published'`
-- Generates metadata from `page.seo.metaTitle`, `page.seo.metaDescription`, and `page.seo.noIndex`
+- Checks `draftMode().isEnabled` from `next/headers` on every request
+- Fetches page with `depth: 3`; omits the `status: 'published'` filter when draft mode is active so unpublished pages are visible in the admin preview
+- Generates metadata from `page.seo.metaTitle`, `page.seo.metaDescription`, and `page.seo.noIndex` (always uses published data, ignores draft mode)
 - Renders all three content areas in order: `<RenderHero hero={page.hero} />`, `<DynamicRenderer layout={page.dbLayout} />`, `<RenderContentBlocks blocks={page.contentBlocks} />`
+- Renders `<LivePreviewListener serverURL={...} />` only when `isDraftMode` is true — zero overhead on public page loads
+- Page component returns a `<>` fragment — the outer `<main>` is provided by `layout.tsx`
 - `generateStaticParams()` pre-renders up to 200 published pages and returns `[]` if the DB is unavailable during build/dev cold-start
 
 ---
@@ -515,8 +818,18 @@ buildConfig({
     user: 'users',
     importMap: { baseDir: path.resolve(dirname) },
     meta: { titleSuffix: '— Block System' },
+    livePreview: {
+      url: ({ data }) => `${process.env.NEXT_PUBLIC_SERVER_URL}/api/draft?slug=${data?.slug}`,
+      collections: ['pages'],
+      breakpoints: [
+        { label: 'Mobile',  name: 'mobile',  width: 375,  height: 667  },
+        { label: 'Tablet',  name: 'tablet',  width: 768,  height: 1024 },
+        { label: 'Desktop', name: 'desktop', width: 1440, height: 900  },
+      ],
+    },
   },
   collections: [BlockDefinitions, BlockDefinitionVersions, Pages, Media, Users],
+  globals: [Header, Footer],
   editor: lexicalEditor({}),
   db: postgresAdapter({
     pool: {
@@ -680,6 +993,47 @@ Uses pre-built CSS (`@payloadcms/next/css`) — no Sass required.
 
 ---
 
+## Seed Script
+
+**File:** `src/scripts/seed.ts`
+
+Run with `pnpm seed`. Loads `.env` via `import 'dotenv/config'` (tsx does not auto-load env files).
+
+### What it does
+
+1. **Registers 8 block definitions** — calls `saveSchemaLocally()` for every registered block. Schemas are imported directly from the component files so the seed stays in sync with the components. If a definition already exists, its name/description/category is updated and a new version is created; otherwise it is created fresh.
+
+   | Slug | Category |
+   |------|----------|
+   | `hero-banner` | layout |
+   | `rich-text` | content |
+   | `card-grid` | content |
+   | `features` | content |
+   | `cta` | content |
+   | `testimonials` | content |
+   | `faq` | content |
+   | `pricing` | content |
+
+2. **Creates the home page demo** — after all definitions succeed, checks if a page with `slug: '/'` already exists:
+   - **Exists with ≥ 4 blocks** → skips update (already seeded)
+   - **Exists with < 4 blocks** → updates with the full 6-block demo (catches legacy 3-block seed)
+   - **Doesn't exist** → creates it (`status: published`)
+
+   The demo page uses preset data (`[preset][0].data`) for each block:
+
+   | Order | Block | Preset |
+   |-------|-------|--------|
+   | 1 | Hero Banner | `heroBannerPresets[0]` — centered gradient hero |
+   | 2 | Features | `featuresPresets[0]` — SaaS features, 3-column grid |
+   | 3 | Testimonials | `testimonialsPresets[0]` — 6-card default grid |
+   | 4 | Pricing | `pricingPresets[0]` — 3-tier SaaS pricing |
+   | 5 | FAQ | `faqPresets[0]` — product FAQ, single column |
+   | 6 | CTA | `ctaPresets[0]` — bottom-of-page CTA |
+
+   Relationship fields (`blockDefinition`, `blockVersion`) require integer IDs for the Postgres adapter. The `definitionId` and `versionId` strings returned by `saveSchemaLocally()` are converted with `parseInt()` (via `toId()` helper) before being passed to `payload.create()`.
+
+---
+
 ## Project File Structure
 
 ```
@@ -694,7 +1048,7 @@ payload/
     ├── app/
     │   ├── (frontend)/
     │   │   ├── [[...slug]]/page.tsx     # Catch-all page renderer
-    │   │   ├── layout.tsx               # Frontend root layout
+    │   │   ├── layout.tsx               # Async frontend layout — fetches globals, renders shell
     │   │   └── globals.css
     │   ├── (payload)/
     │   │   ├── admin/[[...segments]]/   # Payload admin UI
@@ -702,15 +1056,22 @@ payload/
     │   │   ├── api/graphql/route.ts     # Payload GraphQL route
     │   │   └── layout.tsx               # Admin root layout (RootLayout)
     │   └── api/
-    │       └── blocks/
-    │           ├── save/route.ts        # POST /api/blocks/save
-    │           └── preview/route.ts     # POST /api/blocks/preview
+    │       ├── blocks/
+    │       │   ├── save/route.ts        # POST /api/blocks/save
+    │       │   └── preview/route.ts     # POST /api/blocks/preview
+    │       ├── draft/route.ts           # GET  /api/draft   — enables Next.js Draft Mode
+    │       └── exit-draft/route.ts      # GET  /api/exit-draft — disables Draft Mode
     │
     ├── collections/
     │   ├── BlockDefinitions.ts
     │   ├── BlockDefinitionVersions.ts
     │   ├── Pages.ts
     │   ├── Media.ts
+    │   └── index.ts
+    │
+    ├── globals/
+    │   ├── Header.ts                    # Navigation, logo, CTA button, sticky toggle
+    │   ├── Footer.ts                    # Link columns, social links, copyright
     │   └── index.ts
     │
     ├── heros/
@@ -729,15 +1090,6 @@ payload/
     │   ├── populateBlockData.ts
     │   ├── populatePublishedAt.ts
     │   └── revalidateRedirects.ts
-    │
-    ├── utilities/
-    │   ├── deepMerge.ts
-    │   ├── generateMeta.ts
-    │   ├── getDocument.ts
-    │   ├── getGlobals.ts
-    │   ├── getMediaUrl.ts
-    │   ├── getRedirects.ts
-    │   └── ...
     │
     ├── validation/
     │   ├── types.ts                     # BlockSchema, field types, ConditionRule, ValidationRules, UIMetadata, BlocksField, NestedBlockValue
@@ -761,27 +1113,54 @@ payload/
     │   └── index.ts
     │
     ├── components/
+    │   ├── LivePreviewListener.tsx      # 'use client' wrapper for RefreshRouteOnSave
+    │   ├── layout/
+    │   │   ├── Header.tsx               # SiteHeader — 'use client', desktop dropdown + mobile accordion
+    │   │   └── Footer.tsx               # SiteFooter — server component, social icons
     │   ├── SchemaBuilderField/
-    │   │   ├── index.tsx                # Root schema builder component
-    │   │   ├── FieldRow.tsx             # Single field editor (18 types; conditions/validation/ui panels)
-    │   │   ├── OptionsEditor.tsx        # select/multiselect options list
-    │   │   └── NestedFieldsEditor.tsx   # Recursive nested fields (array/group)
+    │   │   ├── index.tsx
+    │   │   ├── FieldRow.tsx
+    │   │   ├── OptionsEditor.tsx
+    │   │   └── NestedFieldsEditor.tsx
     │   └── BlockDataField/
-    │       ├── index.tsx                # Root data form component
-    │       ├── SchemaForm.tsx           # Conditional + tabbed/grid layout rendering
-    │       ├── FieldInput.tsx           # Switch on field.type (18 types)
-    │       ├── ArrayFieldInput.tsx      # Repeatable row editor
-    │       ├── GroupFieldInput.tsx      # Nested object editor
-    │       ├── MediaPickerInput.tsx     # Upload + library picker for image/file
-    │       └── BlocksFieldInput.tsx     # Nested block instance list for 'blocks' fields
+    │       ├── index.tsx
+    │       ├── SchemaForm.tsx
+    │       ├── FieldInput.tsx
+    │       ├── ArrayFieldInput.tsx
+    │       ├── GroupFieldInput.tsx
+    │       ├── MediaPickerInput.tsx
+    │       └── BlocksFieldInput.tsx
+    │
+    ├── scripts/
+    │   └── seed.ts                      # Creates block definitions + home page
     │
     └── blocks/
-        ├── HeroBanner/index.tsx
-        ├── RichText/index.tsx
-        ├── CardGrid/index.tsx
-        ├── Generic/Testimonials/config.ts
+        ├── types.ts                     # Shared BlockPreset interface
+        ├── registry-setup.ts            # Central block registration (8 blocks)
         ├── RenderContentBlocks.tsx      # Renders Payload-native contentBlocks array
-        └── registry-setup.ts           # Central block registration
+        ├── Generic/Testimonials/config.ts
+        ├── HeroBanner/
+        │   ├── index.tsx                # Two-column hero; 5 variants; DashboardMockup
+        │   └── presets.ts               # heroBannerPresets[]
+        ├── RichText/
+        │   └── index.tsx                # Prose block with prose + alignment
+        ├── CardGrid/
+        │   └── index.tsx                # Feature card grid, 6-color accents, subheading
+        ├── Features/
+        │   ├── index.tsx                # Icon feature grid; 5 variants; 16 named SVG icons
+        │   └── presets.ts               # featuresPresets[]
+        ├── CTA/
+        │   ├── index.tsx                # CTA section; 6 variants; centered/split layouts
+        │   └── presets.ts               # ctaPresets[]
+        ├── Testimonials/
+        │   ├── index.tsx                # Testimonial grid; default/featured/dark variants
+        │   └── presets.ts               # testimonialsPresets[]
+        ├── FAQ/
+        │   ├── index.tsx                # Accordion FAQ; 'use client'; single/two-column
+        │   └── presets.ts               # faqPresets[]
+        └── Pricing/
+            ├── index.tsx                # Pricing cards; highlighted plan; 4 variants
+            └── presets.ts               # pricingPresets[]
 ```
 
 ---
@@ -812,10 +1191,52 @@ Payload 3.x allows replacing any field's admin UI with a React component via `ad
 Fields with `conditions` are evaluated live in `SchemaForm` before rendering. Conditions read sibling field values via dot-notation paths. Hidden fields are not rendered but their saved values are preserved — only keys absent from the schema are cleaned. This separates display logic from persistence.
 
 ### 8. Progressive UI Enhancement
-`SchemaForm` checks `hasUIMetadata(schema)` before rendering. Schemas without any layout-affecting `ui` metadata continue rendering in the original flat column layout with zero behavior change. Only schemas that deliberately set `ui.tab`, `ui.section`, `ui.width`, or `ui.order` activate the tabbed grid layout. This guards all pre-existing schemas from accidental regressions.
+`SchemaForm` checks `hasUIMetadata(schema)` before rendering. Schemas without any layout-affecting `ui` metadata continue rendering in the original flat column layout with zero behavior change. Only schemas that deliberately set `ui.tab`, `ui.section`, `ui.width`, or `ui.order` activate the tabbed grid layout.
 
-### 9. Nested/Composable Blocks
+### 9. Live Preview via Next.js Draft Mode
+The admin Live Preview embeds the frontend in an iframe. `livePreview.url` points to `/api/draft?slug=<slug>`, which authenticates the user, sets the Next.js Draft Mode bypass cookie, and redirects to the real page. The page detects `draftMode().isEnabled` and skips the `status: 'published'` filter so unpublished content is visible. `LivePreviewListener` (a `'use client'` component rendered only in draft mode) calls `router.refresh()` on every Payload `postMessage` save event, triggering a server re-render. Public visitors never load `LivePreviewListener` and always see only published content.
+
+### 10. Nested/Composable Blocks
 The `'blocks'` field type enables block composition. `BlocksFieldInput` fetches nested block schemas at runtime using Payload REST batch queries. `NestedBlocksRenderer` on the frontend renders nested blocks via the same registry as top-level blocks, with a configurable depth cap (default 3) to prevent infinite recursion.
+
+### 11. Server-Side Global Fetch for Layout Shell
+The frontend layout is an `async` server component that fetches both globals in a single `Promise.all` before rendering. Because Next.js deduplicates `fetch` calls within a render pass and Payload caches at the DB level, this adds negligible overhead. The layout falls back to empty objects so header/footer always render (empty) even if the DB is unreachable during cold-start.
+
+### 13. Variant-Driven Styling
+Each prebuilt block defines an internal `V` constant mapping variant names to Tailwind class sets:
+
+```ts
+const V = {
+  default:  { outer: 'bg-white',       heading: 'text-gray-900', ... },
+  dark:     { outer: 'bg-gray-950',    heading: 'text-white',    ... },
+  gradient: { outer: 'bg-gradient-to-br from-indigo-50 to-violet-50', ... },
+} satisfies Record<FeaturesVariant, Record<string, string>>
+
+const v = V[variant] ?? V.default
+```
+
+The `satisfies` constraint catches missing keys at compile time without widening the type. All style decisions live in one place — the rendering JSX just references `v.outer`, `v.heading`, etc. with no conditionals scattered through markup.
+
+### 14. Preset System
+**File:** `src/blocks/types.ts`
+
+```ts
+export interface BlockPreset {
+  id: string
+  name: string
+  description?: string
+  data: Record<string, unknown>
+}
+```
+
+Each block exports a `*Presets: BlockPreset[]` array from its `presets.ts` file with 3–5 realistic presets covering different variants. Presets serve two purposes:
+1. **Seed data** — `seed.ts` imports `[preset][0].data` for the demo home page
+2. **Admin quick-start** — presets can be surfaced in the page builder UI to let editors pick a starting point
+
+Preset data is plain JSON that matches the block's schema exactly, so it passes `validateBlockData()` without modification.
+
+### 12. Client/Server Component Boundary for Interactive Navigation
+`SiteHeader` is `'use client'` for dropdown/accordion state. `SiteFooter` and the layout wrapper are server components. The layout passes pre-fetched global data as props — the client component never fetches its own data. An invisible `fixed inset-0` backdrop div closes open dropdowns on outside click without a `useEffect` global event listener, keeping the interaction model simple and memory-leak-free.
 
 ---
 
@@ -836,19 +1257,23 @@ POST /api/blocks/save
 
 ```
 GET /about-us
+  → layout.tsx: getGlobals() → header + footer via payload.findGlobal()
   → getPage("about-us") with depth: 3
   → generateMetadata() from page.seo
+  → <SiteHeader logo=... navigationItems=... ctaButton=... stickyHeader=... />
   → <RenderHero hero={page.hero} />
       → selects HighImpact / MediumImpact / LowImpact by hero.type
   → <DynamicRenderer layout={page.dbLayout} />
       → registry.get(blockDefinition.slug)
-      → <HeroBannerBlock data={...} schema={...} />
+      → <HeroBannerBlock /> / <RichTextBlock /> / <CardGridBlock />
+         <FeaturesBlock /> / <CTABlock /> / <TestimonialsBlock />
+         <FAQBlock /> / <PricingBlock />
          or <FallbackRenderer /> if unregistered
       → if block contains a 'blocks' field:
          → <NestedBlocksRenderer blocks={data.children} />
-            → registry.get(nestedBlock.blockType) per child
   → <RenderContentBlocks blocks={page.contentBlocks} />
       → switch on block.blockType → <TestimonialsBlockView />
+  → <SiteFooter columns=... socialLinks=... copyright=... />
 ```
 
 ### Schema Evolution (Backward-Compatible)
@@ -860,6 +1285,24 @@ POST /api/blocks/save (updated schema)
 
 New pages → use v2 automatically
 Old pages → still pinned to v1, render with original schema, no migration needed
+```
+
+### Live Preview
+
+```
+Editor clicks "Live Preview" in admin
+  → livePreview.url builds: /api/draft?slug=about-us
+  → iframe loads /api/draft?slug=about-us
+      → payload.auth() — 401 if not logged in
+      → draftMode().enable() — sets __prerender_bypass cookie
+      → redirect(/about-us)
+  → page.tsx runs with isDraftMode = true
+      → getPage(slug, isDraft=true) — no status filter, returns any status
+      → renders <LivePreviewListener serverURL="..." />
+  → editor edits a field → Payload auto-saves
+      → window.postMessage fired into iframe
+      → LivePreviewListener calls router.refresh()
+      → server re-renders page.tsx → updated content shown in iframe
 ```
 
 ### Admin Data Entry with Conditions
@@ -874,15 +1317,6 @@ Editor opens page block instance
       → true  → FieldInput rendered
   → onChange → setValue → Payload field value updated
 ```
-
----
-
-## Current Integration Notes
-
-- `src/app/(frontend)/[[...slug]]/page.tsx` renders all three content areas per page: hero (Payload-native), `dbLayout` (runtime versioned blocks via `DynamicRenderer`), and `contentBlocks` (Payload-native via `RenderContentBlocks`).
-- `src/blocks/registry-setup.ts` contains temporary debug `fetch()` instrumentation around registry initialization. The actual registered runtime components are `hero-banner`, `rich-text`, and `card-grid`.
-- Some hero renderers import app-shell components/providers such as `@/components/Link`, `@/components/Media`, `@/components/RichText`, and `@/providers/HeaderTheme`. Those supporting files are not present in the project tree and may require follow-up integration work before the hero path builds cleanly.
-- `src/hooks/populateBlockData.ts` references `@/blocks/Homepage/populateRatings`, which does not exist and is not currently attached to `Pages.ts`.
 
 ---
 
@@ -906,7 +1340,7 @@ pnpm lint:fix            # Next lint with fixes
 pnpm payload             # Run Payload CLI
 pnpm generate:importmap  # Regenerate Payload admin import map
 pnpm generate:types      # Regenerate payload-types.ts
-pnpm seed                # Seed initial block definitions
+pnpm seed                # Seed block definitions + create home page (slug: /)
 pnpm migrate:create      # Create DB migration
 pnpm migrate:run         # Apply migrations
 pnpm migrate:status      # Check migration status
