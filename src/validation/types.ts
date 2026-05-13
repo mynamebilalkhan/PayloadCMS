@@ -92,6 +92,18 @@ export interface UIMetadata {
   order?: number
 }
 
+// ─── Feature 5: Responsive Values ────────────────────────────────────────────
+// When a field has responsive: true, its stored value becomes
+// { desktop: T, tablet?: T, mobile?: T } instead of a plain scalar.
+
+export type Breakpoint = 'desktop' | 'tablet' | 'mobile'
+
+export interface ResponsiveValue<T = unknown> {
+  desktop: T
+  tablet?: T
+  mobile?: T
+}
+
 // ─── Base Field ───────────────────────────────────────────────────────────────
 
 export interface BaseField {
@@ -115,6 +127,8 @@ export interface BaseField {
   validation?: ValidationRules
   /** Feature 3 — admin layout metadata for tab/section/width/order. */
   ui?: UIMetadata
+  /** Feature 5 — when true, the stored value is { desktop, tablet?, mobile? } */
+  responsive?: boolean
 }
 
 // ─── Leaf Field Types ─────────────────────────────────────────────────────────

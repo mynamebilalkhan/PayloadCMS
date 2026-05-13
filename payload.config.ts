@@ -10,8 +10,9 @@ import {
   BlockDefinitionVersions,
   Pages,
   Media,
+  SavedSections,
 } from '@/collections'
-import { Header, Footer } from '@/globals'
+import { Header, Footer, Theme } from '@/globals'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -45,6 +46,7 @@ export default buildConfig({
     BlockDefinitionVersions,
     Pages,
     Media,
+    SavedSections,
     {
       slug: 'users',
       auth: true,
@@ -58,7 +60,7 @@ export default buildConfig({
       ],
     },
   ],
-  globals: [Header, Footer],
+  globals: [Header, Footer, Theme],
   editor: lexicalEditor({}),
   db: postgresAdapter({
     pool: {

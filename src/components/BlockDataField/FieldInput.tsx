@@ -1,7 +1,9 @@
 'use client'
 
-import React from 'react'
+import React, { useState } from 'react'
 import type { BlockField, SelectField, MultiSelectField, ArrayField, GroupField, BlocksField, NestedBlockValue } from '@/validation/types'
+import type { Breakpoint, ResponsiveValue } from '@/theme/responsive'
+import { BREAKPOINTS, isResponsiveValue } from '@/theme/responsive'
 import { ArrayFieldInput } from './ArrayFieldInput'
 import { GroupFieldInput } from './GroupFieldInput'
 import { MediaPickerInput } from './MediaPickerInput'
@@ -12,6 +14,87 @@ type Props = {
   value: unknown
   onChange: (value: unknown) => void
   readOnly?: boolean
+}
+
+// ─── Responsive wrapper ───────────────────────────────────────────────────────
+// Wraps any field that has responsive: true with Desktop / Tablet / Mobile tabs.
+
+function ResponsiveWrapper({
+  field,
+  value,
+  onChange,
+  readOnly,
+  renderInput,
+}: {
+  field: BlockField
+  value: unknown
+  onChange: (value: unknown) => void
+  readOnly?: boolean
+  renderInput: (v: unknown, onV: (next: unknown) => void) => React.ReactNode
+}) {
+  const [activeBreakpoint, setActive] = useState<Breakpoint>('desktop')
+
+  const rv: ResponsiveValue<unknown> = isResponsiveValue(value)
+    ? (value as ResponsiveValue<unknown>)
+    : { desktop: value, tablet: undefined, mobile: undefined }
+
+  function handleChange(bpValue: unknown) {
+    const next: ResponsiveValue<unknown> = { ...rv, [activeBreakpoint]: bpValue }
+    onChange(next)
+  }
+
+  const current = rv[activeBreakpoint] ?? rv.desktop
+
+  const tabBtnStyle = (active: boolean): React.CSSProperties => ({
+    padding: '0.2rem 0.625rem',
+    fontSize: '0.6875rem',
+    fontWeight: active ? 700 : 400,
+    border: active
+      ? '1.5px solid #6366f1'
+      : '1px solid var(--theme-elevation-200, #e5e7eb)',
+    borderRadius: '0.25rem',
+    background: active ? '#eef2ff' : 'transparent',
+    color: active ? '#4338ca' : 'var(--theme-elevation-500, #6b7280)',
+    cursor: 'pointer',
+  })
+
+  return (
+    <div>
+      {/* Breakpoint tabs */}
+      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.5rem' }}>
+        {BREAKPOINTS.map((bp) => {
+          const hasValue = rv[bp.key] !== undefined && rv[bp.key] !== null
+          return (
+            <button
+              key={bp.key}
+              type="button"
+              onClick={() => setActive(bp.key)}
+              style={tabBtnStyle(activeBreakpoint === bp.key)}
+            >
+              {bp.shortLabel}
+              {/* Dot indicator when a breakpoint-specific value is set */}
+              {hasValue && bp.key !== 'desktop' && (
+                <span style={{ marginLeft: '0.2rem', color: '#6366f1' }}>•</span>
+              )}
+            </button>
+          )
+        })}
+        <span style={{ fontSize: '0.6875rem', color: 'var(--theme-elevation-400, #9ca3af)', alignSelf: 'center', marginLeft: '0.25rem' }}>
+          {activeBreakpoint}
+        </span>
+      </div>
+
+      {/* Input for active breakpoint */}
+      {renderInput(current, handleChange)}
+
+      {/* Inherit hint for tablet / mobile */}
+      {activeBreakpoint !== 'desktop' && (rv[activeBreakpoint] === undefined || rv[activeBreakpoint] === null) && (
+        <p style={{ fontSize: '0.6875rem', color: 'var(--theme-elevation-400, #9ca3af)', marginTop: '0.25rem' }}>
+          Inherits from {activeBreakpoint === 'mobile' ? 'tablet → desktop' : 'desktop'}
+        </p>
+      )}
+    </div>
+  )
 }
 
 const inputStyle: React.CSSProperties = {
@@ -69,6 +152,24 @@ function FieldWrapper({
 
 export function FieldInput({ field, value, onChange, readOnly }: Props) {
   const disabled = readOnly || false
+
+  // Responsive fields delegate to ResponsiveWrapper which wraps the inner input.
+  // Container types (array, group, blocks) are excluded — they manage their own
+  // sub-structure and responsive wrapping at that level doesn't make sense.
+  const isContainer = field.type === 'array' || field.type === 'group' || field.type === 'blocks'
+  if (field.responsive && !isContainer) {
+    return (
+      <ResponsiveWrapper
+        field={field}
+        value={value}
+        onChange={onChange}
+        readOnly={readOnly}
+        renderInput={(v, onV) => (
+          <FieldInput field={{ ...field, responsive: false } as BlockField} value={v} onChange={onV} readOnly={readOnly} />
+        )}
+      />
+    )
+  }
 
   switch (field.type) {
     case 'text':

@@ -103,6 +103,26 @@ export const BlockDefinitions: CollectionConfig = {
       },
     },
     {
+      name: 'thumbnail',
+      type: 'upload',
+      relationTo: 'media',
+      label: 'Thumbnail',
+      admin: {
+        description:
+          'Preview image shown in the Insert Block modal and block picker UI.',
+      },
+    },
+    {
+      name: 'previewImage',
+      type: 'upload',
+      relationTo: 'media',
+      label: 'Preview Image (large)',
+      admin: {
+        description:
+          'Full-size preview image shown when hovering a block in the picker.',
+      },
+    },
+    {
       name: 'previewComponent',
       type: 'text',
       label: 'Preview Component Path',
